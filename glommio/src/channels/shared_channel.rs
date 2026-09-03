@@ -637,7 +637,7 @@ mod test {
     use std::{
         sync::{
             atomic::{AtomicUsize, Ordering},
-            Arc,
+            mpsc, Arc,
         },
         time::Duration,
     };
@@ -1055,14 +1055,17 @@ mod test {
     #[test]
     fn shared_drop_cascade_drop_executor_reverse() {
         let (sender, receiver) = new_bounded(100);
+        let (connected_tx, connected_rx) = mpsc::channel();
 
         let original = Arc::new(AtomicUsize::new(0));
         let send_count = original.clone();
         let drop_count = original.clone();
+        let sender_connected = connected_tx.clone();
 
         let ex1 = LocalExecutorBuilder::default()
             .spawn(move || async move {
                 let sender = sender.connect().await;
+                sender_connected.send(()).unwrap();
                 for x in 0..50 {
                     let val = WithDrop(send_count.clone(), x);
                     drop_count.fetch_add(1, Ordering::SeqCst);
@@ -1074,6 +1077,7 @@ mod test {
         let ex2 = LocalExecutorBuilder::default()
             .spawn(move || async move {
                 let receiver = receiver.connect().await;
+                connected_tx.send(()).unwrap();
                 for x in 0..50 {
                     let resp = receiver.recv().await.unwrap();
                     assert_eq!(x, resp.1);
@@ -1081,6 +1085,11 @@ mod test {
             })
             .unwrap();
 
+        // Both endpoints must be connected before destroying the sender's
+        // executor. Otherwise the receiver can observe its peer ID after the
+        // sender's reactor has already removed the corresponding notifier.
+        connected_rx.recv().unwrap();
+        connected_rx.recv().unwrap();
         drop(ex1);
         ex2.join().unwrap();
 
