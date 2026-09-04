@@ -64,7 +64,7 @@ pub struct AdvisoryLockGuard(Option<Arc<OwnedGlommioFile>>);
 impl Drop for AdvisoryLockGuard {
     fn drop(&mut self) {
         if let Some(locked) = self.0.take().and_then(Arc::into_inner) {
-            locked.funlock_immediately().expect("Cannopt unlock fd")
+            locked.funlock_immediately().expect("Cannot unlock fd")
         }
     }
 }
@@ -254,7 +254,7 @@ impl DmaFile {
             | (opts.custom_flags as libc::c_int & !libc::O_ACCMODE);
 
         let res = DmaFile::open_at(dir, path, flags, opts.mode).await;
-        Ok(enhanced_try!(res, opdesc, Some(path.to_path_buf()), None)?)
+        Ok(enhanced_try!(res, opdesc, Some(path), None)?)
     }
 
     pub(super) fn attach_scheduler(&self) {
@@ -778,7 +778,8 @@ impl DmaFile {
     /// NOTE: Clones are allowed to exist on any thread and all share the same underlying
     /// fd safely. try_take_last_clone is also safe to invoke from any thread and will
     /// behave correctly with respect to clones on other threads.
-    pub fn try_take_last_clone(mut self) -> std::result::Result<Self, Box<Self>> {
+    #[expect(clippy::result_large_err)]
+    pub fn try_take_last_clone(mut self) -> std::result::Result<Self, Self> {
         match self.file.try_take_last_clone() {
             Ok(took) => {
                 self.file = took;
@@ -786,7 +787,7 @@ impl DmaFile {
             }
             Err(still_cloned) => {
                 self.file = still_cloned;
-                Err(Box::new(self))
+                Err(self)
             }
         }
     }
@@ -1000,7 +1001,7 @@ impl OwnedDmaFile {
             file: enhanced_try!(
                 self.file.dup(),
                 "Duplicating",
-                self.file.path.clone(),
+                self.file.path.as_ref(),
                 self.file.fd.as_ref().map(|fd| fd.as_raw_fd())
             )?,
             o_direct_alignment: self.o_direct_alignment,
