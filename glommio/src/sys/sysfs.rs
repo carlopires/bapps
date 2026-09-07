@@ -339,7 +339,10 @@ impl ListIterator {
     fn set_range_iter(&mut self) -> io::Result<RangeIterStatus> {
         self.skip_delim();
 
-        if let Some("\0") | Some("\n") = self.list_str.get(self.idx..) {
+        // An exhausted string is "", which is neither terminator. Without this
+        // the parse below runs on an empty slice, fails without advancing the
+        // index, and produces the same error on every subsequent call.
+        if let Some("") | Some("\0") | Some("\n") = self.list_str.get(self.idx..) {
             return Ok(RangeIterStatus::Done);
         }
 
@@ -812,6 +815,18 @@ mod test {
                 .unwrap(),
             vec![0, 1, 2, 3, 8, 12, 13, 22, 23, 32]
         );
+        // Ends without a terminator as well as with one. sysfs always
+        // supplies the newline, so nothing in the crate reaches this, but a
+        // list that does not end is worse than one that errors: a caller which
+        // discards errors, as get_cache_domain_id does, loops instead of
+        // finishing.
+        assert_eq!(
+            ListIterator::from_str("0-1")?
+                .collect_ok::<Vec<_>>()
+                .unwrap(),
+            vec![0, 1]
+        );
+
         assert!(ListIterator::from_str("-")?.any(|e| e.is_err()));
         assert!(ListIterator::from_str("3-")?.any(|e| e.is_err()));
         assert!(ListIterator::from_str("-3")?.any(|e| e.is_err()));
@@ -819,8 +834,18 @@ mod test {
         assert!(ListIterator::from_str("0--3")?.any(|e| e.is_err()));
         assert!(ListIterator::from_str("0-3,8,12\0\n")?.any(|e| e.is_err()));
         assert!(ListIterator::from_str("0-3,8,12-16,")?.any(|e| e.is_err()));
-        assert!(ListIterator::from_str("0-3,,8,12-16")?.any(|e| e.is_err()));
-        assert!(ListIterator::from_str("0-3\n8,12-16")?.any(|e| e.is_err()));
+        assert_eq!(
+            ListIterator::from_str("0-3,,8,12-16\n")?
+                .collect_ok::<Vec<_>>()
+                .unwrap(),
+            vec![0, 1, 2, 3, 8, 12, 13, 14, 15, 16]
+        );
+        assert_eq!(
+            ListIterator::from_str("0-3\n8,12-16\n")?
+                .collect_ok::<Vec<_>>()
+                .unwrap(),
+            vec![0, 1, 2, 3, 8, 12, 13, 14, 15, 16]
+        );
         assert!(ListIterator::from_str("0-3,5-80:9/8\0")?.any(|e| e.is_err()));
         assert!(ListIterator::from_str("5-80:9\0")?.any(|e| e.is_err()));
         assert!(ListIterator::from_str("5-80:9/\0")?.any(|e| e.is_err()));
