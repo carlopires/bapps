@@ -1216,6 +1216,20 @@ pub struct LocalExecutor {
     stall_detector: RefCell<Option<StallDetector>>,
 }
 
+/// What a pass over the task queues left behind.
+///
+/// The caller parks on this, and parking is only correct on `Idle`. Work
+/// behind an active queue is the executor's own: no I/O completion is coming
+/// for it and no peer will write the eventfd, so a sleep entered by mistake
+/// ends only if some unrelated event happens to arrive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskQueueRun {
+    /// A queue is still runnable, whether or not this pass got to it.
+    Runnable,
+    /// Nothing is left to run.
+    Idle,
+}
+
 impl LocalExecutor {
     fn get_reactor(&self) -> Rc<Reactor> {
         self.reactor.clone()
@@ -1448,20 +1462,26 @@ impl LocalExecutor {
         self.reactor.need_preempt()
     }
 
-    fn run_task_queues(&self) -> bool {
-        let mut ran = false;
+    /// Services task queues until preempted or until none is runnable.
+    ///
+    /// This used to answer whether anything had run, which is a different
+    /// question with the same shape: being interrupted before servicing a queue
+    /// is not the same as having nothing to run, and the caller parks on the
+    /// answer.
+    fn run_task_queues(&self) -> TaskQueueRun {
         loop {
             self.reactor.sys.install_eventfd();
             if self.need_preempt() {
-                break;
+                return if self.queues.borrow().active_executors.is_empty() {
+                    TaskQueueRun::Idle
+                } else {
+                    TaskQueueRun::Runnable
+                };
             }
             if !self.run_one_task_queue() {
-                return false;
-            } else {
-                ran = true;
+                return TaskQueueRun::Idle;
             }
         }
-        ran
     }
 
     fn run_one_task_queue(&self) -> bool {
@@ -1608,13 +1628,13 @@ impl LocalExecutor {
                     .expect("Failed to poll io! This is actually pretty bad!");
 
                 // run user code
-                let run = this.run_task_queues();
+                let queues = this.run_task_queues();
 
                 // account for runtime and poll/sleep if possible
                 let cur_time = Instant::now();
                 this.queues.borrow_mut().stats.total_runtime += cur_time - pre_time;
                 pre_time = cur_time;
-                if !run {
+                if queues == TaskQueueRun::Idle {
                     if let Poll::Ready(t) = future.as_mut().poll(cx) {
                         // It may be that we just became ready now that the task queue
                         // is exhausted. But if we sleep (park) we'll never know so we
@@ -1624,6 +1644,11 @@ impl LocalExecutor {
                     } else {
                         while !this.reactor.spin_poll_io().unwrap() {
                             if pre_time.elapsed() > spin_before_park {
+                                debug_assert!(
+                                    this.queues.borrow().active_executors.is_empty(),
+                                    "parking with {} runnable task queues: nothing will wake us",
+                                    this.queues.borrow().active_executors.len()
+                                );
                                 this.parker
                                     .park()
                                     .expect("Failed to park! This is actually pretty bad!");
@@ -3433,6 +3458,39 @@ mod test {
         }
         let usage = unsafe { s0.assume_init() };
         from_timeval(usage.ru_utime) + from_timeval(usage.ru_stime)
+    }
+
+    #[test]
+    fn preemption_heavy_workload_makes_progress() {
+        // Drives the path the hang was found on: several queues with a short
+        // latency budget, all yielding, so the pass over the queues is
+        // interrupted by preemption repeatedly. Paired with the debug_assert
+        // at the park site, a queue left runnable while the executor sleeps
+        // fails here rather than hanging.
+        LocalExecutor::default().run(async {
+            let mut tasks = Vec::new();
+            for i in 0..4 {
+                let tq = crate::executor().create_task_queue(
+                    Shares::Static(1000),
+                    Latency::Matters(Duration::from_micros(100)),
+                    "preempt",
+                );
+                tasks.push(
+                    crate::spawn_local_into(
+                        async move {
+                            for _ in 0..(200 * (i + 1)) {
+                                crate::executor().yield_task_queue_now().await;
+                            }
+                        },
+                        tq,
+                    )
+                    .unwrap(),
+                );
+            }
+            for t in tasks {
+                t.await;
+            }
+        });
     }
 
     #[test]
