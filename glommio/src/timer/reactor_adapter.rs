@@ -8,6 +8,7 @@
 use super::staged_wheel::StagedWheel;
 use super::timer_id::TimerId;
 use ahash::AHashMap;
+use std::collections::BTreeSet;
 use std::task::Waker;
 use std::time::{Duration, Instant};
 
@@ -36,6 +37,12 @@ pub(crate) struct ReactorTimers {
     /// TODO: This is the remaining HashMap that could be eliminated by
     /// exposing expiry times from the wheel itself
     id_to_expiry: AHashMap<u64, Instant>,
+
+    /// The same timers ordered by expiry, so the next deadline is the first
+    /// element instead of a scan over every live timer on every reactor pass.
+    /// With thousands of live timers (per-request deadlines) that scan
+    /// dominated a busy executor.
+    by_expiry: BTreeSet<(Instant, u64)>,
 }
 
 impl ReactorTimers {
@@ -43,6 +50,7 @@ impl ReactorTimers {
         Self {
             wheel: StagedWheel::new(),
             id_to_expiry: AHashMap::new(),
+            by_expiry: BTreeSet::new(),
         }
     }
 
@@ -55,7 +63,10 @@ impl ReactorTimers {
         let internal_id = self.wheel.insert(expires_at, waker);
 
         // Track expiry time (needed for next_timer_duration calculation)
-        self.id_to_expiry.insert(internal_id, expires_at);
+        if let Some(previous) = self.id_to_expiry.insert(internal_id, expires_at) {
+            self.by_expiry.remove(&(previous, internal_id));
+        }
+        self.by_expiry.insert((expires_at, internal_id));
 
         // Return ID (wrapping the wheel's internal ID)
         // Generation is 0 for now (we don't track reuse yet)
@@ -69,7 +80,7 @@ impl ReactorTimers {
         let internal_id = id.index() as u64;
 
         // Remove from expiry tracking
-        self.id_to_expiry.remove(&internal_id);
+        self.forget(internal_id);
 
         // Remove from wheel
         self.wheel.remove(internal_id)
@@ -103,7 +114,7 @@ impl ReactorTimers {
 
         // Clean up expiry time mappings
         for (internal_id, _) in &expired {
-            self.id_to_expiry.remove(internal_id);
+            self.forget(*internal_id);
         }
 
         // Now wake all timers (safe: no longer holding any mutable state)
@@ -113,11 +124,17 @@ impl ReactorTimers {
         }
 
         // Find the next timer expiry
-        let next_expiry = self.id_to_expiry.values().copied().min();
+        let next_expiry = self.by_expiry.first().map(|(expires_at, _)| *expires_at);
 
         let next_duration = next_expiry.map(|expires_at| expires_at.saturating_duration_since(now));
 
         (next_duration, woke)
+    }
+
+    fn forget(&mut self, internal_id: u64) {
+        if let Some(expires_at) = self.id_to_expiry.remove(&internal_id) {
+            self.by_expiry.remove(&(expires_at, internal_id));
+        }
     }
 
     /// Get the number of active timers
@@ -223,5 +240,31 @@ mod tests {
         assert!(timers.exists(id1));
         assert!(!timers.exists(id2));
         assert!(timers.exists(id3));
+    }
+
+    #[test]
+    fn next_deadline_tracks_insertions_removals_and_expiry() {
+        let mut timers = ReactorTimers::new();
+        let now = Instant::now();
+        let near = timers.insert(now + Duration::from_secs(10), dummy_waker());
+        let _far = timers.insert(now + Duration::from_secs(30), dummy_waker());
+        let _mid = timers.insert(now + Duration::from_secs(20), dummy_waker());
+
+        let (next, _) = timers.process_timers();
+        assert!(next.unwrap() <= Duration::from_secs(10));
+
+        timers.remove(near);
+        let (next, _) = timers.process_timers();
+        let next = next.unwrap();
+        assert!(next > Duration::from_secs(10) && next <= Duration::from_secs(20));
+
+        let _expired = timers.insert(now, dummy_waker());
+        let (next, woke) = timers.process_timers();
+        assert_eq!(woke, 1);
+        assert!(
+            next.unwrap() > Duration::from_secs(10),
+            "expired timer is forgotten"
+        );
+        assert_eq!(timers.len(), 2);
     }
 }

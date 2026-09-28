@@ -21,6 +21,19 @@ glommio = { package = "glommio-ng", version = "0.12" }
 in automatically by the default `macros` feature. You do not depend on it
 directly.
 
+## 0.12.0-cp.2 — carlopires fork
+
+Perf: the reactor found the next timer deadline by scanning every live timer
+on every pass (`values().min()` over the expiry map). With per-request
+deadlines there are thousands of live timers, and a profile of a busy
+two-executor RUDB node spent 77% of user CPU in that scan. Timers are now also
+kept in a `BTreeSet` ordered by expiry, so the next deadline is its first
+element. On the same RUDB benchmark one executor went from ~30.6k to ~56.4k
+requests/s. Upstream master fixes the same scan differently (wheel occupancy);
+this is the minimal change on 0.12.0.
+
+Regression: `timer::reactor_adapter::tests::next_deadline_tracks_insertions_removals_and_expiry`.
+
 ## 0.12.0-cp.1 — carlopires fork, based on 0.12.0
 
 Fix: an accept or open that completed without any caller collecting its
