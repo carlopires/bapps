@@ -143,11 +143,40 @@ pub(crate) struct InnerSource {
     pub(crate) stats_collection: Option<StatsCollection>,
 
     pub(crate) task_queue: Option<TaskQueueHandle>,
+
+    /// Whether the result has been handed to a caller through
+    /// [`Source::result`]. For operations that create a descriptor, a caller
+    /// that sees the result takes ownership of that descriptor.
+    pub(crate) result_observed: bool,
 }
 
 impl InnerSource {
     pub(crate) fn update_source_type(&mut self, source_type: SourceType) -> SourceType {
         std::mem::replace(&mut self.source_type, source_type)
+    }
+}
+
+impl Drop for InnerSource {
+    fn drop(&mut self) {
+        // Accept and open complete with a new descriptor. If nobody ever saw
+        // that result -- the future was dropped after the kernel completed it,
+        // a listener was dropped with a completed accept parked inside, or
+        // the request was cancelled too late to stop it -- this source is the
+        // descriptor's only owner. Close it rather than leak it: a leaked
+        // accepted socket also leaves its client waiting forever.
+        if self.result_observed
+            || !matches!(
+                self.source_type,
+                SourceType::Accept(_) | SourceType::Open(_)
+            )
+        {
+            return;
+        }
+        if let Some(Ok(fd)) = self.wakers.result {
+            // SAFETY: the kernel created `fd` for this operation and it was
+            // never handed out, so nothing else can own or close it.
+            unsafe { libc::close(fd as RawFd) };
+        }
     }
 }
 
@@ -186,6 +215,7 @@ impl Source {
                 timeout: None,
                 stats_collection,
                 task_queue,
+                result_observed: false,
             })),
         }
     }
@@ -245,6 +275,7 @@ impl Source {
         if ret.is_none() {
             return ret;
         }
+        inner.result_observed = true;
 
         // if there is a scheduler latency collection function present, invoke it once
         if let Some(Some(stat_fn)) = inner.stats_collection.as_ref().map(|x| x.latency) {

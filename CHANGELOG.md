@@ -21,6 +21,21 @@ glommio = { package = "glommio-ng", version = "0.12" }
 in automatically by the default `macros` feature. You do not depend on it
 directly.
 
+## 0.12.0-cp.1 — carlopires fork, based on 0.12.0
+
+Fix: an accept or open that completed without any caller collecting its
+result leaked the new descriptor. The common way to hit it is dropping a
+`TcpListener` (or `UnixListener`) whose abandoned `accept()` future left an
+io_uring accept in flight: when a client connects before the listener goes
+away, the kernel accepts the connection into a socket nobody serves or
+closes, and that client waits until its own timeout. A too-late cancellation
+of a dispatched accept/open, or dropping an open future after its completion
+was reaped, leaked the same way.
+
+`InnerSource` now records whether its result was handed to a caller; on drop,
+an `Accept`/`Open` source whose descriptor was never observed closes it.
+Regression: `net::tcp_socket::tests::dropped_listener_closes_an_accepted_socket_nobody_collected`.
+
 ## 0.12.0 — 2026-09-02
 
 Two fixes and one new API. Upgrade for the fixes: both are memory-safety

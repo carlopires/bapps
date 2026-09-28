@@ -1201,6 +1201,47 @@ mod tests {
         time::{Duration, Instant},
     };
 
+    /// An accept that completes while no `accept` future is polling it is
+    /// parked in the listener. Dropping the listener must close that socket;
+    /// otherwise nobody owns it and the client waits forever.
+    #[test]
+    fn dropped_listener_closes_an_accepted_socket_nobody_collected() {
+        test_executor!(async move {
+            for _ in 0..16 {
+                let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+                let addr = listener.local_addr().unwrap();
+                {
+                    // Arm an io_uring accept, then abandon the future. The
+                    // listener keeps the in-flight source for the next call.
+                    let accept = listener.accept();
+                    futures_lite::pin!(accept);
+                    assert!(futures_lite::future::poll_once(accept).await.is_none());
+                }
+                Timer::new(Duration::from_millis(1)).await;
+                let mut client = std::net::TcpStream::connect(addr).unwrap();
+                // The reactor reaps the completed accept into that source.
+                Timer::new(Duration::from_millis(1)).await;
+                drop(listener);
+
+                client
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut byte = [0u8; 1];
+                let read = loop {
+                    match std::io::Read::read(&mut client, &mut byte) {
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                        other => break other,
+                    }
+                };
+                match read {
+                    Ok(0) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => {}
+                    other => panic!("accepted socket leaked; client read returned {other:?}"),
+                }
+            }
+        });
+    }
+
     #[test]
     fn tcp_listener_ttl() {
         test_executor!(async move {
