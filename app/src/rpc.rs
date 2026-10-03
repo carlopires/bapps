@@ -4,7 +4,7 @@ use crate::{ReadyGate, ShardId};
 use async_channel::{Receiver, Sender};
 use bapps_otp::{ChildContext, TaskStatus};
 use bapps_trio::{
-    CancelScope, Obligation, TaskClass, cancel_on, sync::Condition, with_cancel_scope,
+    CancelReason, CancelScope, Obligation, TaskClass, cancel_on, sync::Condition, with_cancel_scope,
 };
 use glommio::timer::Timer;
 use std::{
@@ -301,9 +301,15 @@ impl<M: Send + 'static, R: Send + 'static> ShardClient<M, R> {
         }
         let _admission = Active::new(self.inner.counters.clone(), None);
         let clock = &*self.inner.clock;
+        // Never wait longer than the caller has left: its effective deadline
+        // caps `options.timeout`, and travels to the handler with the request.
+        let caller_left = scope
+            .effective_deadline()
+            .map(|deadline| deadline.saturating_sub(bapps_trio::current_clock().now()));
+        let timeout = caller_left.map_or(options.timeout, |left| left.min(options.timeout));
         let deadline = clock
             .now()
-            .checked_add(options.timeout)
+            .checked_add(timeout)
             .ok_or_else(|| CallError::InvalidOptions("timeout overflow".into()))?;
         // Waiting for readiness: nothing has been sent yet.
         before(scope, deadline, clock, self.inner.gate.wait(scope))
@@ -645,6 +651,10 @@ where
     if clock.now() >= deadline {
         return Err(CallError::Deadline { acknowledged: true });
     }
+    // The handler sees the caller's deadline (remaining(), and calls it makes
+    // are capped by it). Enforced below by `deadline_timer`.
+    let left = deadline.saturating_duration_since(clock.now());
+    scope.set_deadline(bapps_trio::current_clock().now().saturating_add(left));
     let mut handler = Box::pin(with_cancel_scope(scope.clone(), make(scope.clone())));
     let mut peer_cancel = Box::pin(cancelled.recv());
     let mut owner_cancel = Box::pin(scope.cancelled());
@@ -659,8 +669,12 @@ where
             } else if deadline_timer.as_mut().poll(cx).is_ready() {
                 cause = Some(CallError::Deadline { acknowledged: true });
             }
-            if cause.is_some() {
-                scope.cancel();
+            if let Some(error) = &cause {
+                let reason = match error {
+                    CallError::Deadline { .. } => CancelReason::Deadline,
+                    _ => CancelReason::Explicit,
+                };
+                scope.cancel_with(reason);
                 grace_timer = Some(clock.sleep_until(clock.now() + grace));
             }
         }

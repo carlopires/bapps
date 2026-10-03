@@ -255,7 +255,13 @@ impl CancelScope {
         self.inner.deadline.get()
     }
 
-    pub(crate) fn set_deadline(&self, deadline: Duration) {
+    /// Record this scope's deadline, a time on [`crate::current_clock`], so
+    /// that [`Self::effective_deadline`] and [`crate::remaining`] report it.
+    ///
+    /// Recording does not enforce it: whoever records a deadline must cancel
+    /// the scope when it passes, as the deadline helpers do and as an RPC
+    /// layer does for a request that carries its caller's deadline.
+    pub fn set_deadline(&self, deadline: Duration) {
         self.inner.deadline.set(Some(deadline));
     }
 
