@@ -17,8 +17,8 @@ A shard ID is its index in the configured CPU list, not the CPU number. `--cpus 
 
 ## Capabilities (0.6.0)
 
-Part of [bapps](../README.md) 0.6.0, on `bapps-core` (glommio fork
-`v0.12.0-ng-cp.4`).
+Part of [bapps](../README.md) 0.6.0, on `bapps-core`, the runtime in
+`core/`.
 
 | Capability | API | Tests / docs |
 |---|---|---|

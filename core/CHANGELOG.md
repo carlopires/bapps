@@ -21,6 +21,25 @@ glommio = { package = "glommio-ng", version = "0.12" }
 in automatically by the default `macros` feature. You do not depend on it
 directly.
 
+## bapps core (bapps 0.6.0)
+
+This runtime is now maintained in [bapps](https://github.com/carlopires/bapps)
+as `core/` (package `bapps-core`, library `glommio`); the carlopires/glommio
+fork that carried the `cp` releases below is retired. Upstream changes
+(dahankzter/glommio, community glommio/glommio) are pulled into `core/`
+directly with `git subtree pull`, reviewed as before and recorded here.
+
+Since `0.12.0-cp.4`, tests only:
+
+- `a_parked_executor_is_woken_by_a_foreign_send` waits for the consumer to
+  connect before the sender's executor exits (it could see its peer gone and
+  close the channel).
+- `send_file`'s DMA scratch files use `CARGO_TARGET_TMPDIR` instead of
+  `<manifest>/../target`, which assumed the crate's position in a workspace.
+- `a_bare_executor_lifecycle_does_not_grow_the_descriptor_count` waits up to
+  5 s for the descriptor count to settle before calling growth a leak (one
+  leaked descriptor per lifecycle still fails it: 4 -> 24).
+
 ## 0.12.0-cp.4 — carlopires fork, selected community glommio fixes
 
 Five of the 30 commits on community `glommio/glommio` since 2026-09-07,

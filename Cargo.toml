@@ -6,7 +6,7 @@ members = ["core/glommio", "core/glommio-macros", "trio", "otp", "app"]
 exclude = ["core/examples"]
 
 [workspace.package]
-# One version for the platform crates. `core` keeps the glommio fork's own
+# One version for the platform crates. `core` keeps Glommio's own
 # version line (see core/CHANGELOG.md) so upstream merges stay simple.
 version = "0.6.0"
 edition = "2024"

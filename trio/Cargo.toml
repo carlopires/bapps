@@ -14,9 +14,8 @@ name = "bapps_trio"
 path = "src/lib.rs"
 
 [dependencies]
-# glommio-ng 0.12.0 plus a descriptor-leak fix (a dropped listener could leak
-# an accepted socket), from the carlopires fork's cp/0.12 branch. The crate is
-# named `glommio` there, so application code is unchanged.
+# The runtime in core/ (package bapps-core), whose library keeps the name
+# `glommio`, so application code uses `glommio::` paths.
 glommio.workspace = true
 futures-lite = "2.6"
 task-local = "0.1.1"

@@ -8,7 +8,7 @@ all: validate
 # Format, lints with warnings denied, every test, docs.
 # Core's criterion benchmarks (from the dahankzter sync) do not pass
 # `clippy -D warnings` even on upstream's pinned toolchain, so the core gate
-# covers its library and tests; fix the benchmarks in the fork to widen it.
+# covers its library and tests; fix the benchmarks in core/ to widen it.
 validate:
 	cargo fmt --all --check
 	cargo clippy $(PLATFORM) --all-targets --all-features --locked -- -D warnings

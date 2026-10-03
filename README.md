@@ -9,7 +9,7 @@ your application                      domain logic, network protocol, storage
   bapps-app   (app/)                  pinned shards, readiness, bounded cross-shard RPC, lab node
   bapps-otp   (otp/)                  supervision trees, service generations, mailboxes, registry
   bapps-trio  (trio/)                 nurseries, cancel scopes, deadlines, obligations, lab executor
-  bapps-core  (core/)                 io_uring thread-per-core runtime (glommio fork)
+  bapps-core  (core/)                 io_uring thread-per-core runtime (from Glommio)
 ```
 
 | Crate | Directory | Version | Capabilities and docs |
@@ -43,19 +43,28 @@ make bench         # core benchmarks
 
 ## History and upstream
 
-Each directory was imported with `git subtree`, so its full history is
-here: `core/` from the carlopires glommio fork (`cp/0.12`, itself based on
-[dahankzter/glommio](https://github.com/dahankzter/glommio) and selected
-fixes from the community [glommio/glommio](https://github.com/glommio/glommio));
-`trio/`, `otp/`, `app/` from the former `glommio_trio`, `glommio_otp` and
-`glommio_app` repositories. Upstream runtime changes come in with
-`git subtree pull --prefix=core <fork> cp/0.12` after review; the review
-record for every upstream sync is in [core/CHANGELOG.md](core/CHANGELOG.md).
+`core/` is where the runtime is maintained. Its history is Glommio's:
+[DataDog/glommio](https://github.com/DataDog/glommio), the community fork
+[glommio/glommio](https://github.com/glommio/glommio), and
+[dahankzter/glommio](https://github.com/dahankzter/glommio), plus the fixes
+made for bapps (release line `v0.12.0-ng-cp.1` to `cp.4`). `trio/`, `otp/`
+and `app/` were developed as separate repositories (`glommio-trio`,
+`glommio-otp`, `glommio-app` 0.5.x); their CHANGELOGs carry that history.
 
-Workspace-only changes to `core/`: the fork's root `Cargo.toml` is replaced
-by this workspace, the packages are renamed `bapps-core` and
-`bapps-core-macros`, and its bench profile moved to the root. Fixes to the
-runtime itself, tests included, are made in the fork and pulled here.
+Fixes to the runtime, tests included, are made in `core/` directly. Upstream
+changes are pulled straight into it after review, for example:
+
+```sh
+git subtree pull --prefix=core https://github.com/dahankzter/glommio master
+```
+
+and the review of every sync is recorded in [core/CHANGELOG.md](core/CHANGELOG.md).
+To offer a fix upstream, `git subtree split --prefix=core` gives a branch
+with upstream's paths to open a pull request from.
+
+Workspace-only changes to `core/`: Glommio's root `Cargo.toml` is replaced by
+this workspace, the packages are renamed `bapps-core` and
+`bapps-core-macros`, and its bench profile moved to the root.
 
 ## License
 
