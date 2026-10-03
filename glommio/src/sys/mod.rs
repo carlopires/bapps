@@ -559,10 +559,9 @@ impl SockAddrStorage {
         }
     }
 
-    /// Address and length pointers for handing to the kernel.
-    ///
-    /// The kernel writes both, so they must stay valid until the completion is
-    /// reaped; the `Source` owning this storage is what guarantees that.
+    /// Address and length pointers for handing to the kernel. It writes both,
+    /// so they must stay valid until the completion is reaped -- which the
+    /// `Source` owning this storage is what guarantees.
     pub(crate) fn as_raw_parts(&mut self) -> (*mut libc::sockaddr, *mut libc::socklen_t) {
         (
             self.storage.as_mut_ptr() as *mut libc::sockaddr,
@@ -571,18 +570,26 @@ impl SockAddrStorage {
     }
 }
 
-/// The kernel's `struct __kernel_timespec`.
-///
-/// Two fixed-width fields with a stable kernel ABI, laid out exactly as
-/// `io_uring::types::Timespec` is, which is what lets the submission path hand
-/// the kernel a pointer to one of these without copying it into a temporary
-/// that would be dropped before the SQE is consumed.
+/// The kernel's `struct __kernel_timespec`, laid out the same as
+/// `io_uring::types::Timespec` so the submission path can pass a pointer to
+/// one without copying it.
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
 pub(crate) struct KernelTimespec {
     pub tv_sec: i64,
     pub tv_nsec: i64,
 }
+
+// `io-uring` is a separate crate, so hold it to that layout here: a change
+// there would otherwise show up as a timeout of garbage duration.
+const _: () = {
+    assert!(
+        std::mem::size_of::<KernelTimespec>() == std::mem::size_of::<io_uring::types::Timespec>()
+    );
+    assert!(
+        std::mem::align_of::<KernelTimespec>() == std::mem::align_of::<io_uring::types::Timespec>()
+    );
+};
 
 #[derive(Clone, Copy)]
 pub(crate) struct TimeSpec64 {

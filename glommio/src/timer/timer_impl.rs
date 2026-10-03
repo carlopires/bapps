@@ -10,7 +10,7 @@ use std::{
     future::Future,
     pin::Pin,
     rc::{Rc, Weak},
-    task::{Context, Poll},
+    task::{Context, Poll, Waker},
     time::{Duration, Instant},
 };
 
@@ -19,7 +19,14 @@ type Result<T> = crate::Result<T, ()>;
 #[derive(Debug)]
 struct Inner {
     /// Timer ID for O(1) cancellation (no HashMap lookup!)
-    id: Option<crate::timer::timer_id::TimerId>,
+    id: Option<crate::timer::slab::TimerId>,
+    /// The waker handed to the reactor alongside `id`.
+    ///
+    /// The wheel mints a fresh id per insert, so re-registering does not
+    /// replace the old entry the way a caller-supplied id used to. Keeping the
+    /// waker lets a re-poll ask whether the registration it already has still
+    /// wakes the right task, and skip the reactor entirely when it does.
+    registered_waker: Option<Waker>,
     is_charged: bool,
     when: Instant,
     reactor: Weak<Reactor>,
@@ -40,6 +47,7 @@ impl Inner {
         // Timer will be re-registered on next poll
         self.is_charged = false;
         self.id = None;
+        self.registered_waker = None;
     }
 }
 
@@ -100,6 +108,7 @@ impl Timer {
         Timer {
             inner: Rc::new(RefCell::new(Inner {
                 id: None, // Will be set on first poll
+                registered_waker: None,
                 is_charged: false,
                 when: Instant::now() + dur,
                 reactor: Rc::downgrade(&reactor),
@@ -161,19 +170,35 @@ impl Future for Timer {
 
         if Instant::now() >= inner.when {
             // Deregister the timer if needed
-            if let Some(id) = inner.id {
+            if let Some(id) = inner.id.take() {
                 inner.reactor.upgrade().unwrap().remove_timer(id);
             }
+            inner.registered_waker = None;
+            inner.is_charged = false;
             Poll::Ready(inner.when)
         } else {
-            // Register the timer and get handle (O(1), no HashMap!)
-            let id = inner
-                .reactor
-                .upgrade()
-                .unwrap()
-                .insert_timer(inner.when, cx.waker().clone());
-            inner.id = Some(id);
-            inner.is_charged = true;
+            // A registration already routing to this task is still good, and
+            // re-registering would leave the previous one behind to fire and
+            // wake a task that has moved on.
+            let already_registered = match (&inner.id, &inner.registered_waker) {
+                (Some(_), Some(waker)) => waker.will_wake(cx.waker()),
+                _ => false,
+            };
+
+            if !already_registered {
+                if let Some(stale) = inner.id.take() {
+                    inner.reactor.upgrade().unwrap().remove_timer(stale);
+                }
+                let waker = cx.waker().clone();
+                let id = inner
+                    .reactor
+                    .upgrade()
+                    .unwrap()
+                    .insert_timer(inner.when, waker.clone());
+                inner.id = Some(id);
+                inner.registered_waker = Some(waker);
+                inner.is_charged = true;
+            }
             Poll::Pending
         }
     }

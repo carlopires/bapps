@@ -5,22 +5,32 @@
 This is a **maintained fork** of [DataDog/glommio](https://github.com/DataDog/glommio), created when that repository went quiet.
 
 **The situation has since changed (checked 2026-08-02).** `DataDog/glommio` is
-abandoned — last commit 2025-04-21, sixteen open PRs, the oldest from 2021. A
+abandoned, last commit 2025-04-21, sixteen open PRs, the oldest from 2021. A
 community fork at **[glommio/glommio](https://github.com/glommio/glommio)** took
 over: a new org with the original author's blessing to take the crates.io name
 (DataDog issue #707). This fork's `#700` fix is already merged there.
 
-**But that fork has gone quiet too (checked 2026-08-10).** Last commit
-2026-06-13, last merged PR 2026-06-22. Six of our PRs have been open since
-2026-08-02 with no review, no comments, and no CI runs. Not abandoned — a
-volunteer project between bursts — but **do not plan around an upstream merge
-landing.** This fork is the artifact consumers should depend on. Keep the PRs
-open, keep them rebasing cleanly, don't add more, don't chase. See
-[docs/UPSTREAM.md](docs/UPSTREAM.md#upstream-activity).
+**Upstream is alive and the gate is open (checked 2026-09-07).** `#35`, the
+io-uring migration, **merged on 2026-09-07** as `8c881a5`. That is the first of
+ours to land, and it satisfies the standing gate, which was one PR merged rather
+than one reviewed. Three people are now active on our PRs: `utilitydelta`, who
+reviewed #35 with a 437-test conformance suite, `humb1t`, and `vlovich`, who has
+reviewed #33 and #32 in detail and asked to be made a maintainer.
+
+So the advice changes:
+
+- **Opening further PRs is allowed now**, in the staged order in
+  [docs/UPSTREAM.md](docs/UPSTREAM.md). Two at a time still, and smallest first.
+- **Answer reviews promptly and concede where they are right.** `vlovich` was
+  right that #40 rather than our #32 is the fix for #448, and right that #33's
+  wheel was unsound. Both cost less to accept than to argue.
+- **This fork is still the artifact consumers should depend on**, since only one
+  of ours has landed.
+- **Keep the PRs rebasing cleanly.** `main` moves now.
 
 **So upstream means `glommio/glommio`, not DataDog.** See
 [docs/UPSTREAM.md](docs/UPSTREAM.md) for what is worth contributing, in what
-order, and where it conflicts with their 15 commits we do not have.
+order, and where it conflicts with commits we do not have.
 
 **Fork Purpose:**
 - Fix critical safety issues (memory corruption, resource leaks)
@@ -30,14 +40,14 @@ order, and where it conflicts with their 15 commits we do not have.
 
 **Upstream Status:**
 - Abandoned original: https://github.com/DataDog/glommio (last commit 2025-04-21)
-- Community fork: https://github.com/glommio/glommio — contribute here, but it
-  has been quiet since 2026-06-22
-- This fork: https://github.com/dahankzter/glommio — merged with the community
+- Community fork: https://github.com/glommio/glommio, contribute here. Active
+  again as of 2026-09-07, with our #35 merged
+- This fork: https://github.com/dahankzter/glommio, merged with the community
   fork on 2026-08-02, now ahead only. **This is what consumers should use.**
 - `io-uring` is a plain crates.io dependency at **0.7.14**, which carries the
   accessor `need_preempt` needs
   ([#404](https://github.com/tokio-rs/io-uring/pull/404), merged 2026-08-09,
-  released 2026-08-11). **No git dependencies anywhere — this fork is
+  released 2026-08-11). **No git dependencies anywhere, this fork is
   publishable.**
 
 ## Development Environment
@@ -181,19 +191,25 @@ glommio/
 │   ├── README.md               # Documentation index
 │   └── investigations/
 │       ├── issue_448/          # Eventfd leak investigation
-│       │   ├── README.md       # Detailed root cause analysis
+│       │   ├── README.md       # Root cause here is wrong; see upstream #40
 │       │   └── reproduce.rs    # Reproduction test
+│       ├── timer-comparison/   # Three timer implementations, measured
+│       │   └── README.md       # Read before touching timers
 │       └── task-arena/         # Arena allocator: built, measured, reverted
-│           └── README.md       # Post-mortem — read before proposing an arena
+│           └── README.md       # Post-mortem, read before proposing an arena
 ├── glommio/
 │   ├── src/
 │   │   ├── channels/
 │   │   │   ├── spsc_queue.rs   # Fixed: Issue #700 (memory corruption)
 │   │   │   └── shared_channel.rs
 │   │   ├── sys/mod.rs          # SleepNotifier (related to #448)
+│   │   ├── timer/              # Slab handles over a cascading wheel
+│   │   │   ├── slab.rs         # Positions a cascade cannot move
+│   │   │   └── timing_wheel.rs # The wheel; slots hold slab positions
 │   │   ├── task/               # Task lifecycle management
 │   │   └── executor/           # LocalExecutor implementation
 │   ├── benches/                # Benchmarks
+│   ├── examples/               # Measurement ladders, see docs/investigations
 │   └── tests/                  # Integration tests
 └── .gitignore                  # Excludes .claude/ and test files
 ```
@@ -211,24 +227,54 @@ glommio/
 
 **Issue #448 - Eventfd Leak on Executor Drop**
 - **Severity:** High (resource exhaustion in long-running apps)
-- **Root Cause:** Non-runnable tasks don't have destructors called, so the
-  `Arc<SleepNotifier>` each task held was never dropped and the eventfd leaked
-- **Fix:** The task header stores `executor_id: usize` instead of the notifier
-  (`f28a619`); the notifier is resolved only on the foreign-wake path, so tasks
-  no longer pin the eventfd at all. This also removed a process-wide `RwLock`
-  read from every spawn.
-- **Documentation:** `docs/investigations/issue_448/README.md`
+- **Root cause, and we had it wrong.** We said non-runnable tasks never run
+  their destructors, so the `Arc<SleepNotifier>` each task held was never
+  dropped. The real cause is one level down: the task **header is never
+  deallocated at all**, so the `Arc` inside it cannot drop and the eventfd goes
+  with it. `vlovich` found this and fixed it in upstream
+  [#40](https://github.com/glommio/glommio/pull/40), which also fixes the plain
+  memory leak that comes with a leaked header.
+- **What our `f28a619` does:** stores `executor_id` in the header instead of the
+  notifier, so tasks do not hold it whether or not the header leaks. That
+  relieves the fd symptom and leaves the memory leak alone. Treat it as the
+  performance change it is: it removes a process-wide `RwLock` read from every
+  spawn, worth 3760 ns to 50 ns per spawn at 64 concurrent executors. Offered as
+  [#32](https://github.com/glommio/glommio/pull/32), reframed accordingly.
+- **Documentation:** `docs/investigations/issue_448/README.md`, which still
+  carries the old root-cause claim and needs the same correction
 - **Quote from Original Maintainer:** "Really hard because tasks often get destroyed under our nose. This brought me back to the refcount hell in the task structures."
+
+**Timer structure, chosen by measurement (2026-09-07)**
+- Three implementations built and compared: the ordered map upstream uses, a
+  slab-backed wheel, and the `bitwheel` crate. `master` runs the slab wheel and
+  it is offered as [#44](https://github.com/glommio/glommio/pull/44).
+- **Read `docs/investigations/timer-comparison/README.md` before touching
+  timers.** Two things in it are easy to get wrong again: the asymptotic
+  argument for a wheel does not appear at any population glommio actually holds,
+  and a wheel puts a floor under short sleeps unless it reports the deadline it
+  was asked for rather than the tick it rounded into.
+- Re-run it with `make timer-arms`, or
+  `TIMER_ARMS_WARMUP=3 TIMER_ARMS_TIME=10 TIMER_ARMS_SAMPLES=100 make timer-arms`
+  for numbers worth quoting.
+- **Benchmarks go in `benches/` and use criterion.** A hand-written timing loop
+  read a cold allocator here and buried the effect it was measuring under noise
+  of its own making, which is how this investigation reached the wrong answer
+  once already.
+- `bitwheel` was rejected. Two soundness and correctness bugs reported upstream
+  ([#18](https://github.com/Abso1ut3Zer0/bitwheel/issues/18),
+  [#19](https://github.com/Abso1ut3Zer0/bitwheel/issues/19)), and its fixed slot
+  capacity degrades into a `BTreeMap` on a workload built from identical
+  timeouts, which is ours.
 
 **Reverted Work**
 
-**Task Arena Allocator** — built, benchmarked, removed. Read
+**Task Arena Allocator**, built, benchmarked, removed. Read
 `docs/investigations/task-arena/README.md` before proposing any glommio-side
 allocator: the premise (malloc lock contention on the spawn path) was measured
 and does not hold, and the arena cost ~98 MB resident per executor while
 segfaulting on detached tasks. Recommend mimalloc to deployments instead.
 
-### 📋 Historical Workarounds (#448, superseded by the fix above)
+### 📋 Historical Workarounds (#448, superseded by upstream #40)
 1. Use long-lived executors (don't create/destroy repeatedly)
 2. Thread-local executor pattern for tests
 3. Increase file descriptor limits: `ulimit -n 65536`
@@ -576,7 +622,7 @@ git show                    # See the last commit with diff
 
 - **Write tests first** when fixing bugs
 - **Test must fail** before the fix to validate it catches the issue
-- **Run full test suite** before pushing: `make ci` (not `make all` — see below)
+- **Run full test suite** before pushing: `make ci` (not `make all`, see below)
 - **Check CI** after pushing - rebase on green PRs if needed
 
 ### Running Tests on Different Platforms
@@ -634,7 +680,7 @@ git remote -v
 
 **There are two GitHub forks, and this trips people up.** `dahankzter/glommio`
 was forked from `DataDog/glommio` before the community fork existed, so GitHub
-still labels it "forked from DataDog/glommio" — that badge is metadata fixed at
+still labels it "forked from DataDog/glommio", that badge is metadata fixed at
 creation and cannot be repointed. It does **not** mean the remotes are wrong.
 `dahankzter/glommio-community` was forked later from `glommio/glommio` and is
 what upstream pull requests are raised from.
@@ -676,7 +722,7 @@ visible, so unit tests cannot see either bug. **An integration test in
 `glommio/tests/` compiles as a separate crate and sees exactly what a consumer
 sees.**
 
-So: **new public API gets an integration test that drives it** — construct the
+So: **new public API gets an integration test that drives it**, construct the
 type, implement the trait, call the function. `tests/public_api_is_usable.rs`
 and `tests/rx_buf_is_implementable.rs` are the pattern. The test does not have
 to check correctness, which is the unit tests' job; it has to prove the thing
@@ -717,8 +763,8 @@ limactl start
 ## Getting Help
 
 - **GitHub Issues:** https://github.com/dahankzter/glommio/issues
-- **Upstream Issues:** https://github.com/glommio/glommio/issues — the live fork
-- **DataDog issues:** https://github.com/DataDog/glommio/issues — abandoned, but
+- **Upstream Issues:** https://github.com/glommio/glommio/issues, the live fork
+- **DataDog issues:** https://github.com/DataDog/glommio/issues, abandoned, but
   still worth reading; several describe problems this fork has since measured or
   fixed (see `docs/investigations/`)
 - **Maintainer:** @dahankzter

@@ -17,8 +17,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-        with:
-          submodules: recursive
 
       # See https://github.com/rust-lang/rust/issues/148431
       - name: Use Rust 1.93 for documentation
@@ -49,8 +47,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-        with:
-          submodules: recursive
 
       - name: Cache setup
         uses: ./.github/actions/cache-setup
@@ -86,8 +82,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-        with:
-          submodules: recursive
 
       - name: Set up musl
         if: matrix.musl

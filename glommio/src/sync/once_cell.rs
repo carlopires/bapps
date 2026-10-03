@@ -42,9 +42,12 @@ impl<T> OnceCell<T> {
 
     /// Returns the value, or `None` if the cell is still empty.
     pub fn get(&self) -> Option<&T> {
-        // Safety: the value is only ever written once, under the semaphore,
-        // and is never removed or replaced afterwards -- so a shared reference
-        // handed out here cannot be invalidated while it lives.
+        // Safety: the value is written at most once and never removed or
+        // replaced, so a shared reference handed out here cannot be
+        // invalidated while it lives. Every writer checks the cell is empty
+        // and writes without awaiting in between, which on a single-threaded
+        // executor is what makes "at most once" true. Note the semaphore alone
+        // does not: `set` never takes it.
         unsafe { (*self.value.get()).as_ref() }
     }
 
@@ -113,9 +116,17 @@ impl<T> OnceCell<T> {
         // which case the cell is still empty and this caller tries.
         if self.get().is_none() {
             let value = init().await?;
-            // Safety: the permit makes this the only writer, and the check
-            // above proved nobody has published a value yet.
-            unsafe { *self.value.get() = Some(value) };
+            // Re-checked after the await, not before it. `set` publishes
+            // without taking a permit, so it can land while `init` is
+            // suspended, and overwriting then would drop a value that `get`
+            // has already handed out a reference to. First publication wins;
+            // a later initialiser's value is dropped instead.
+            //
+            // Safety: nothing awaits between the check and the write, so on a
+            // single-threaded executor no other task can publish in between.
+            if self.get().is_none() {
+                unsafe { *self.value.get() = Some(value) };
+            }
         }
 
         Ok(self.get().expect("the cell was just initialised"))
@@ -145,9 +156,14 @@ impl<T> OnceCell<T> {
 
         if self.get().is_none() {
             let value = init().await;
-            // Safety: the permit makes this the only writer, and `get` above
-            // proved nobody has published a value yet.
-            unsafe { *self.value.get() = Some(value) };
+            // See `get_or_try_init`: the check has to be on this side of the
+            // await, because `set` does not take the permit.
+            //
+            // Safety: nothing awaits between the check and the write, so no
+            // other task can publish in between.
+            if self.get().is_none() {
+                unsafe { *self.value.get() = Some(value) };
+            }
         }
 
         self.get().expect("the cell was just initialised")
@@ -354,6 +370,63 @@ mod tests {
             assert_eq!(slow.await.unwrap(), 7);
             assert_eq!(second, 7, "the second caller should see the first value");
             assert_eq!(*runs.borrow(), 1, "the initialiser ran more than once");
+        });
+    }
+}
+
+#[cfg(test)]
+mod write_once {
+    use super::*;
+    use crate::{timer::sleep, LocalExecutor};
+    use std::{rc::Rc, time::Duration};
+
+    /// `set` takes no permit, so it can publish while an initialiser holding
+    /// the permit is suspended in `init().await`. If `get_or_init` then wrote
+    /// on the strength of a check it made before that await, it would replace
+    /// a value `get` may already have handed out a reference to: for any `T`
+    /// with a destructor, that drops the value out from under a live `&T`.
+    ///
+    /// First publication wins, and the later value is dropped instead.
+    #[test]
+    fn a_value_published_while_an_initialiser_runs_is_not_replaced() {
+        LocalExecutor::default().run(async {
+            let cell: Rc<OnceCell<u32>> = Rc::new(OnceCell::new());
+
+            let initialiser = crate::spawn_local({
+                let cell = cell.clone();
+                async move {
+                    cell.get_or_init(|| async {
+                        sleep(Duration::from_millis(20)).await;
+                        2
+                    })
+                    .await;
+                }
+            });
+
+            // Let the initialiser take the permit and park inside `init`.
+            sleep(Duration::from_millis(5)).await;
+
+            assert_eq!(cell.set(1), Ok(()), "the cell is still empty");
+            let published = cell.get().expect("just set");
+            assert_eq!(*published, 1);
+
+            initialiser.await;
+
+            assert_eq!(
+                cell.get(),
+                Some(&1),
+                "the initialiser replaced a value that was already published"
+            );
+        });
+    }
+
+    #[test]
+    fn an_initialiser_still_wins_when_nothing_races_it() {
+        LocalExecutor::default().run(async {
+            let cell: OnceCell<u32> = OnceCell::new();
+            assert_eq!(*cell.get_or_init(|| async { 7 }).await, 7);
+            assert_eq!(cell.set(9), Err(9), "already initialised");
+            assert_eq!(cell.get(), Some(&7));
         });
     }
 }

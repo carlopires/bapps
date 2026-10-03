@@ -35,7 +35,7 @@
 //! });
 //! ```
 
-use crate::wakers::WakerList;
+use crate::wakers::{PendingWakes, WakerList};
 use std::{
     cell::{Cell, RefCell},
     future::Future,
@@ -45,13 +45,78 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
-    task::{Context, Poll},
+    task::{Context, Poll, Waker},
 };
+
+/// Waker registrations that can be withdrawn again.
+///
+/// A plain list is the wrong shape for a token that is watched in a loop.
+/// `select!`ing on `cancelled()` each time round builds a fresh future, polls
+/// it once and drops it, so an append-only list gains a clone of the same
+/// waker per iteration and never loses one: memory grows with the loop, and
+/// cancelling then wakes a single task once per iteration it ever ran.
+///
+/// Keys stay valid only until the token is cancelled, which is terminal:
+/// afterwards `Cancelled::poll` returns without registering, so nothing new
+/// takes a key that a live future still holds.
+#[derive(Debug, Default)]
+struct Registrations {
+    slots: Vec<Option<Waker>>,
+    free: Vec<usize>,
+}
+
+impl Registrations {
+    fn register(&mut self, waker: Waker) -> usize {
+        match self.free.pop() {
+            Some(key) => {
+                self.slots[key] = Some(waker);
+                key
+            }
+            None => {
+                self.slots.push(Some(waker));
+                self.slots.len() - 1
+            }
+        }
+    }
+
+    /// Points an existing registration at `waker`, unless it already wakes the
+    /// same task. Re-polling a future is not a new registration.
+    fn refresh(&mut self, key: usize, waker: &Waker) {
+        if let Some(slot) = self.slots.get_mut(key) {
+            match slot {
+                Some(existing) if existing.will_wake(waker) => {}
+                slot => *slot = Some(waker.clone()),
+            }
+        }
+    }
+
+    fn withdraw(&mut self, key: usize) {
+        if let Some(slot) = self.slots.get_mut(key) {
+            if slot.take().is_some() {
+                self.free.push(key);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn registered(&self) -> usize {
+        self.slots.iter().flatten().count()
+    }
+
+    fn take(&mut self) -> PendingWakes {
+        self.free.clear();
+        let mut list = WakerList::new();
+        for waker in self.slots.drain(..).flatten() {
+            list.push(waker);
+        }
+        list.take()
+    }
+}
 
 #[derive(Debug, Default)]
 struct Node {
     cancelled: Cell<bool>,
-    wakers: RefCell<WakerList>,
+    wakers: RefCell<Registrations>,
     /// Weak, so a child that outlives its parent keeps working rather than
     /// keeping the parent alive.
     children: RefCell<Vec<Weak<Node>>>,
@@ -70,7 +135,7 @@ struct Node {
 #[derive(Debug, Default)]
 struct ForeignState {
     cancelled: AtomicBool,
-    wakers: Mutex<WakerList>,
+    wakers: Mutex<Registrations>,
 }
 
 impl ForeignState {
@@ -155,7 +220,7 @@ impl CancellationToken {
     pub fn child_token(&self) -> Self {
         let child = Rc::new(Node {
             cancelled: Cell::new(self.node.cancelled.get()),
-            wakers: RefCell::new(WakerList::new()),
+            wakers: RefCell::new(Registrations::default()),
             children: RefCell::new(Vec::new()),
             foreign: RefCell::new(Vec::new()),
         });
@@ -193,7 +258,7 @@ impl CancellationToken {
     pub fn foreign_child(&self) -> ForeignCancellation {
         let state = Arc::new(ForeignState {
             cancelled: AtomicBool::new(self.node.cancelled.get()),
-            wakers: Mutex::new(WakerList::new()),
+            wakers: Mutex::new(Registrations::default()),
         });
 
         if !state.is_cancelled() {
@@ -221,7 +286,10 @@ impl CancellationToken {
     /// Dropping the returned future is safe: it leaves behind a waker that is
     /// discarded when cancellation eventually drains the list.
     pub fn cancelled(&self) -> Cancelled<'_> {
-        Cancelled { token: self }
+        Cancelled {
+            token: self,
+            registration: None,
+        }
     }
 }
 
@@ -235,6 +303,10 @@ impl Default for CancellationToken {
 #[derive(Debug)]
 pub struct Cancelled<'a> {
     token: &'a CancellationToken,
+    /// Where this future's waker sits, once it has parked. Withdrawn on drop,
+    /// so a future that is polled and dropped without firing, which is what
+    /// every turn of a `select!` loop does, leaves nothing behind.
+    registration: Option<usize>,
 }
 
 impl Future for Cancelled<'_> {
@@ -245,8 +317,27 @@ impl Future for Cancelled<'_> {
             return Poll::Ready(());
         }
 
-        self.token.node.wakers.borrow_mut().push(cx.waker().clone());
+        let this = self.get_mut();
+        let mut wakers = this.token.node.wakers.borrow_mut();
+        match this.registration {
+            // Already parked: point the existing registration at the current
+            // waker rather than adding another.
+            Some(key) => wakers.refresh(key, cx.waker()),
+            None => this.registration = Some(wakers.register(cx.waker().clone())),
+        }
         Poll::Pending
+    }
+}
+
+impl Drop for Cancelled<'_> {
+    fn drop(&mut self) {
+        // Nothing to withdraw once cancelled: the list was drained and the
+        // keys with it, and no new registration can follow.
+        if let Some(key) = self.registration {
+            if !self.token.is_cancelled() {
+                self.token.node.wakers.borrow_mut().withdraw(key);
+            }
+        }
     }
 }
 
@@ -317,6 +408,7 @@ impl ForeignCancellation {
 
         let waiting = ForeignCancelled {
             state: self.state.clone(),
+            registration: None,
         };
         let to_cancel = token.clone();
 
@@ -339,6 +431,11 @@ impl ForeignCancellation {
 /// else here, because it is what the watching task parks on.
 struct ForeignCancelled {
     state: Arc<ForeignState>,
+    /// As in [`Cancelled`]: withdrawn on drop, so a poll that does not fire
+    /// leaves nothing behind. Reached far less often here, since this is
+    /// awaited once by the watching task rather than round a loop, but the
+    /// registration has the same shape and should not need a different rule.
+    registration: Option<usize>,
 }
 
 impl Future for ForeignCancelled {
@@ -349,16 +446,32 @@ impl Future for ForeignCancelled {
             return Poll::Ready(());
         }
 
-        let mut wakers = self.state.wakers.lock().unwrap();
+        let this = self.get_mut();
+        let mut wakers = this.state.wakers.lock().unwrap();
 
         // Re-checked under the lock: the origin may have cancelled between the
         // read above and here, in which case nobody is left to wake us.
-        if self.state.is_cancelled() {
+        if this.state.is_cancelled() {
             return Poll::Ready(());
         }
 
-        wakers.push(cx.waker().clone());
+        match this.registration {
+            Some(key) => wakers.refresh(key, cx.waker()),
+            None => this.registration = Some(wakers.register(cx.waker().clone())),
+        }
         Poll::Pending
+    }
+}
+
+impl Drop for ForeignCancelled {
+    fn drop(&mut self) {
+        // As in `Cancelled`: nothing to withdraw once cancelled, since the
+        // list was drained and no new registration can follow.
+        if let Some(key) = self.registration {
+            if !self.state.is_cancelled() {
+                self.state.wakers.lock().unwrap().withdraw(key);
+            }
+        }
     }
 }
 
@@ -624,5 +737,134 @@ mod tests {
 
             waiter.await;
         });
+    }
+}
+
+#[cfg(test)]
+mod registration {
+    use super::*;
+    use crate::LocalExecutor;
+    use futures_lite::future::poll_once;
+
+    /// Watching a token in a loop is the idiom this type exists for: build a
+    /// future, poll it, drop it, go round again. It must not cost anything per
+    /// iteration.
+    #[test]
+    fn watching_in_a_loop_leaves_nothing_behind() {
+        LocalExecutor::default().run(async {
+            let token = CancellationToken::new();
+
+            for _ in 0..1_000 {
+                assert!(poll_once(token.cancelled()).await.is_none());
+            }
+
+            assert_eq!(
+                token.node.wakers.borrow().registered(),
+                0,
+                "a future that was polled and dropped without firing left its \
+                 waker registered"
+            );
+        });
+    }
+
+    /// Re-polling the same future is not a new registration.
+    #[test]
+    fn re_polling_one_future_registers_once() {
+        LocalExecutor::default().run(async {
+            let token = CancellationToken::new();
+            let mut pending = Box::pin(token.cancelled());
+
+            for _ in 0..10 {
+                assert!(poll_once(&mut pending).await.is_none());
+            }
+
+            assert_eq!(token.node.wakers.borrow().registered(), 1);
+            drop(pending);
+            assert_eq!(token.node.wakers.borrow().registered(), 0);
+        });
+    }
+
+    /// Withdrawn slots are reused rather than growing the list.
+    #[test]
+    fn withdrawn_slots_are_reused() {
+        LocalExecutor::default().run(async {
+            let token = CancellationToken::new();
+            for _ in 0..100 {
+                assert!(poll_once(token.cancelled()).await.is_none());
+            }
+            assert_eq!(
+                token.node.wakers.borrow().slots.len(),
+                1,
+                "one slot, taken and given back a hundred times"
+            );
+        });
+    }
+
+    #[test]
+    fn a_waiting_future_is_still_woken() {
+        LocalExecutor::default().run(async {
+            let token = CancellationToken::new();
+            let child = token.child_token();
+
+            let waiter = crate::spawn_local(async move { child.cancelled().await });
+            crate::timer::sleep(std::time::Duration::from_millis(5)).await;
+            token.cancel();
+
+            waiter.await;
+        });
+    }
+}
+
+#[cfg(test)]
+mod foreign_registration {
+    use super::*;
+    use crate::LocalExecutor;
+    use futures_lite::future::poll_once;
+
+    /// Same rule as the local future, checked the same way. This one is
+    /// normally awaited once rather than in a loop, so the accumulation is
+    /// unlikely to bite, but the registration should not behave differently
+    /// depending on how hard it is to reach.
+    #[test]
+    fn polling_and_dropping_leaves_nothing_registered() {
+        LocalExecutor::default().run(async {
+            let token = CancellationToken::new();
+            let remote = token.foreign_child();
+            let state = remote.state.clone();
+
+            for _ in 0..100 {
+                let waiting = ForeignCancelled {
+                    state: state.clone(),
+                    registration: None,
+                };
+                assert!(poll_once(waiting).await.is_none());
+            }
+
+            assert_eq!(state.wakers.lock().unwrap().registered(), 0);
+            assert_eq!(
+                state.wakers.lock().unwrap().slots.len(),
+                1,
+                "one slot, taken and given back"
+            );
+        });
+    }
+
+    #[test]
+    fn a_foreign_waiter_is_still_woken() {
+        let token = CancellationToken::new();
+        let remote = token.foreign_child();
+
+        let worker = std::thread::spawn(move || {
+            LocalExecutor::default().run(async move {
+                remote.attach().cancelled().await;
+            })
+        });
+
+        LocalExecutor::default().run(async {
+            crate::timer::sleep(std::time::Duration::from_millis(20)).await;
+            token.cancel();
+        });
+
+        worker.join().expect("the far side was woken");
     }
 }

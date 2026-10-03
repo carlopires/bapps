@@ -296,7 +296,7 @@ impl RxBuf for Preallocated {
 
 #[derive(Debug)]
 struct Timeout {
-    handle: Cell<Option<crate::timer::timer_id::TimerId>>,
+    handle: Cell<Option<crate::timer::slab::TimerId>>,
     timeout: Cell<Option<Duration>>,
     timer: Cell<Option<Instant>>,
 }
@@ -344,18 +344,25 @@ impl Timeout {
     }
 
     fn check(&self, reactor: &Reactor) -> io::Result<()> {
-        if let Some(id) = self.handle.get() {
-            if !reactor.timer_exists(id) {
-                reactor.remove_timer(id);
-                self.handle.take();
-                self.timer.take();
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "Operation timed out",
-                ));
-            }
+        // Ask the deadline, not the registry. A handle can be absent because
+        // the timer fired or because it was cancelled, and only one of those
+        // is a timeout; the deadline distinguishes them and does not depend on
+        // how timers happen to be stored.
+        let Some(deadline) = self.timer.get() else {
+            return Ok(());
+        };
+        if Instant::now() < deadline {
+            return Ok(());
         }
-        Ok(())
+
+        if let Some(id) = self.handle.take() {
+            reactor.remove_timer(id);
+        }
+        self.timer.take();
+        Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "Operation timed out",
+        ))
     }
 }
 

@@ -82,16 +82,20 @@ impl SharedChannels {
 mod timers {
     use super::*;
     use crate::timer::reactor_adapter::ReactorTimers;
-    use crate::timer::timer_id::TimerId;
+    use crate::timer::slab::TimerId;
 
     pub(super) struct Timers {
         wheel: ReactorTimers,
+        #[cfg(feature = "debugging")]
+        stats: crate::timer::debugging::TimerStats,
     }
 
     impl Timers {
         pub(super) fn new() -> Timers {
             Timers {
                 wheel: ReactorTimers::new(),
+                #[cfg(feature = "debugging")]
+                stats: Default::default(),
             }
         }
 
@@ -99,23 +103,41 @@ mod timers {
         ///
         /// BREAKING CHANGE: Now returns TimerId instead of using external IDs
         pub(super) fn insert_with_handle(&mut self, when: Instant, waker: Waker) -> TimerId {
+            #[cfg(feature = "debugging")]
+            self.stats.record_insert();
             self.wheel.insert(when, waker)
         }
 
         /// Remove a timer by handle (O(1), no hashing!)
         pub(super) fn remove_by_handle(&mut self, handle: TimerId) -> bool {
-            self.wheel.remove(handle)
-        }
-
-        /// Check if a timer exists by handle
-        pub(super) fn exists_by_handle(&self, handle: TimerId) -> bool {
-            self.wheel.exists(handle)
+            let removed = self.wheel.remove(handle);
+            #[cfg(feature = "debugging")]
+            if removed {
+                self.stats.record_cancel();
+            }
+            removed
         }
 
         /// Return the duration until next event and the number of
         /// ready and woke timers.
-        pub(super) fn process_timers(&mut self) -> (Option<Duration>, usize) {
-            self.wheel.process_timers()
+        pub(super) fn process_timers(
+            &mut self,
+            wakers: &mut Vec<Waker>,
+        ) -> (Option<Duration>, usize) {
+            let (next, woke) = self.wheel.process_timers(wakers);
+            #[cfg(feature = "debugging")]
+            self.stats.record_fired(woke);
+            (next, woke)
+        }
+
+        /// Snapshot of the population counters.
+        ///
+        /// These sit here rather than inside the wheel deliberately: the
+        /// numbers must mean the same thing whichever timer implementation is
+        /// underneath, or the implementations cannot be compared.
+        #[cfg(feature = "debugging")]
+        pub(super) fn stats(&self) -> crate::timer::debugging::TimerStats {
+            self.stats.clone()
         }
     }
 }
@@ -143,18 +165,18 @@ pub(crate) struct Reactor {
 
     timers: RefCell<Timers>,
 
+    /// Reused across polls so expiring a batch of timers allocates nothing.
+    /// Lives outside `timers` so it can be filled under that borrow and
+    /// drained after it is released.
+    timer_wakers: RefCell<Vec<Waker>>,
+
     shared_channels: RefCell<SharedChannels>,
 
     io_scheduler: Rc<IoScheduler>,
     record_io_latencies: bool,
 
-    /// Whether there are events in the latency ring.
-    ///
-    /// Acquired once during initialization: the ring is behind a `RefCell`, and
-    /// `need_preempt` runs on every scheduler iteration and every cooperative
-    /// yield point, so borrowing the queue to ask would cost far more than the
-    /// comparison does. `CompletionStatus` borrows nothing and answers in two
-    /// loads without entering the kernel.
+    /// Whether the latency ring has events waiting. Taken once at startup:
+    /// `need_preempt` runs constantly and must not borrow the ring to ask.
     preempt_status: CompletionStatus,
 }
 
@@ -171,6 +193,7 @@ impl Reactor {
         Ok(Reactor {
             sys,
             timers: RefCell::new(Timers::new()),
+            timer_wakers: RefCell::new(Vec::new()),
             shared_channels: RefCell::new(SharedChannels::new()),
             io_scheduler: Rc::new(IoScheduler::new()),
             record_io_latencies,
@@ -748,11 +771,7 @@ impl Reactor {
     /// Registers a timer and returns a TimerId for O(1) cancellation.
     ///
     /// This API provides direct access to timer storage without HashMap overhead.
-    pub(crate) fn insert_timer(
-        &self,
-        when: Instant,
-        waker: Waker,
-    ) -> crate::timer::timer_id::TimerId {
+    pub(crate) fn insert_timer(&self, when: Instant, waker: Waker) -> crate::timer::slab::TimerId {
         let mut timers = self.timers.borrow_mut();
         timers.insert_with_handle(when, waker)
     }
@@ -760,23 +779,43 @@ impl Reactor {
     /// Removes a timer by TimerId (O(1), no hashing).
     ///
     /// Returns true if the timer was found and removed.
-    pub(crate) fn remove_timer(&self, id: crate::timer::timer_id::TimerId) -> bool {
+    pub(crate) fn remove_timer(&self, id: crate::timer::slab::TimerId) -> bool {
         let mut timers = self.timers.borrow_mut();
         timers.remove_by_handle(id)
     }
 
-    /// Checks if a timer exists by TimerId.
-    pub(crate) fn timer_exists(&self, id: crate::timer::timer_id::TimerId) -> bool {
-        let timers = self.timers.borrow();
-        timers.exists_by_handle(id)
+    /// Snapshot of this executor's timer population counters.
+    #[cfg(feature = "debugging")]
+    pub(crate) fn timer_stats(&self) -> crate::timer::debugging::TimerStats {
+        self.timers.borrow().stats()
     }
 
     /// Processes ready timers and extends the list of wakers to wake.
     ///
     /// Returns the duration until the next timer
     fn process_timers(&self) -> (Option<Duration>, usize) {
-        let mut timers = self.timers.borrow_mut();
-        timers.process_timers()
+        // Collect first, wake after. `timers` is a RefCell, so a waker that
+        // arms or cancels a timer while we still hold it re-enters and panics
+        // on the second borrow. The scratch buffer is kept across calls so a
+        // batch of expiries costs no allocation.
+        let mut scratch = std::mem::take(&mut *self.timer_wakers.borrow_mut());
+        debug_assert!(
+            scratch.is_empty(),
+            "scratch is drained before it is returned"
+        );
+
+        let next = {
+            let mut timers = self.timers.borrow_mut();
+            timers.process_timers(&mut scratch).0
+        };
+
+        let woke = scratch.len();
+        for waker in scratch.drain(..) {
+            wake!(waker);
+        }
+        *self.timer_wakers.borrow_mut() = scratch;
+
+        (next, woke)
     }
 
     fn process_shared_channels(&self) -> usize {

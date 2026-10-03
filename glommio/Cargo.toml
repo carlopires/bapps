@@ -69,7 +69,7 @@ typenum               = "1.19"
 rustc_version = "0.4.1"
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = { version = "0.8.2", default-features = false, features = ["async", "cargo_bench_support"] }
 fastrand = "2.3"
 futures = "0.3"
 hdrhistogram = "7.5"
@@ -105,6 +105,14 @@ name    = "competing_io"
 [[bench]]
 harness = false
 name    = "echo"
+
+[[bench]]
+harness = false
+name    = "spawn"
+
+[[bench]]
+harness = false
+name    = "timer"
 
 [[bench]]
 harness = false
@@ -150,10 +158,6 @@ name    = "spsc_queue"
 [[bench]]
 harness = false
 name    = "tcp"
-
-[[bench]]
-harness = false
-name    = "timer_benchmark"
 
 [[bench]]
 harness = false

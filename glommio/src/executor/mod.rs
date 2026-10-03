@@ -3487,20 +3487,12 @@ mod test {
             let ex_ru_finish = getrusage();
             let spinning_cpu = ex_ru_finish - ex_ru_start;
 
-            // Compare against the executor that parked rather than against an
-            // absolute figure. `spin_before_park` spins for a wall-clock
-            // window, but `getrusage` reports the CPU this thread was actually
-            // given, so an absolute threshold silently asserts that the thread
-            // owns a core. Share the core with anything else — a parallel test
-            // suite, a busy CI runner — and it measures the share it got
-            // instead of whether it spun at all. Halve the core and the old
-            // 90 ms threshold sees ~50 ms and fails, which is exactly the
-            // ~49.8 ms that CI used to report.
-            //
-            // The property under test survives that: a spinning executor burns
-            // orders of magnitude more CPU than a parked one, whatever share
-            // of a core it is given. If spinning regressed, this figure would
-            // collapse to `parked_cpu` and the assertion would still catch it.
+            // Compared against the parked executor, not an absolute figure:
+            // `getrusage` reports the CPU this thread was given, so a fixed
+            // threshold really asserts that we own a core. Sharing one halves
+            // the number, which is where CI's old ~49.8 ms came from. A
+            // spinning executor still burns orders of magnitude more than a
+            // parked one whatever share it gets.
             let floor = 10 * parked_cpu.max(Duration::from_millis(1));
             assert!(
                 spinning_cpu >= floor,

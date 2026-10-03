@@ -83,6 +83,7 @@ help:
 	@echo "Benchmarking:"
 	@echo "  make bench             - Run all benchmarks"
 	@echo "  make bench-timer       - Run timer benchmarks only"
+	@echo "  make timer-arms        - Compare every timer implementation"
 	@echo "  make bench-spawn       - Run spawn benchmarks only"
 	@echo "  make bench-ci          - Run benchmarks in CI format"
 	@echo ""
@@ -211,7 +212,15 @@ bench:
 
 bench-timer:
 	@echo "→ Running timer benchmarks on $(PLATFORM)..."
-	@$(call run_cargo,bench --bench timer_benchmark)
+	@$(call run_cargo,run --release --features debugging --example timer_bench)
+
+# Runs the timer benchmark against every arm of the timer comparison, in one
+# sitting on one machine. Checks out each arm branch and restores yours after,
+# so it needs a clean tree. Pass arm names to run a subset:
+#   make timer-arms ARMS="a-slab-wheel control-btreemap"
+timer-arms:
+	@echo "→ Running the timer comparison on $(PLATFORM)..."
+	@scripts/timer-arms.sh $(ARMS)
 
 bench-spawn:
 	@echo "→ Running spawn benchmarks on $(PLATFORM)..."
@@ -219,7 +228,7 @@ bench-spawn:
 
 bench-ci:
 	@echo "→ Running benchmarks in CI mode (bencher format) on $(PLATFORM)..."
-	@$(call run_cargo,bench --bench timer_benchmark -- --output-format bencher)
+	@$(call run_cargo,bench --bench spawn_benchmark -- --output-format bencher)
 
 # =============================================================================
 # Miri - Undefined Behavior Detection

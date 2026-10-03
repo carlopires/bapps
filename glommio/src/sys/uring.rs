@@ -201,9 +201,6 @@ impl Drop for UringBuffer {
 }
 
 /// The opcodes glommio cannot run without.
-///
-/// Named by their kernel opcode number via `io-uring`'s `opcode::*::CODE`
-/// constants rather than a hand-maintained enum.
 static GLOMMIO_URING_OPS: &[(&str, u8)] = &[
     ("NOP", io_uring::opcode::Nop::CODE),
     ("READV", io_uring::opcode::Readv::CODE),
@@ -250,8 +247,8 @@ impl fmt::Display for UringUnsupported {
                 match err.raw_os_error() {
                     Some(libc::ENOSYS) => write!(
                         f,
-                        ". The kernel does not implement io_uring at all; glommio needs 5.6 or \
-                         newer"
+                        ". The kernel does not implement io_uring at all; glommio's supported \
+                         minimum is 5.8"
                     ),
                     Some(libc::EPERM) => {
                         write!(
@@ -282,8 +279,8 @@ impl fmt::Display for UringUnsupported {
             }
             UringUnsupported::MissingOps(ops) => write!(
                 f,
-                "the kernel's io_uring is missing operations glommio submits: {}. glommio needs a \
-                 kernel of 5.6 or newer",
+                "the kernel's io_uring is missing operations glommio submits: {}. glommio's \
+                 supported minimum is 5.8",
                 ops.iter()
                     .map(|op| format!("IORING_OP_{op}"))
                     .collect::<Vec<_>>()
@@ -304,14 +301,7 @@ fn io_uring_disabled() -> Option<u8> {
         .ok()
 }
 
-/// Verifies the running kernel implements everything glommio needs.
-///
-/// Uses `io-uring`'s probe rather than liburing's `io_uring_get_probe`, so no
-/// raw pointer handling and no manual free.
-///
-/// Returns the reason rather than terminating: a library has no business
-/// calling `exit` on a process it does not own, and a caller that cannot use
-/// io_uring here may well have another runtime to fall back to.
+/// Checks the kernel implements every opcode glommio submits.
 fn check_supported_operations(ops: &[(&'static str, u8)]) -> Result<(), UringUnsupported> {
     let ring = io_uring::IoUring::new(1).map_err(UringUnsupported::SetupFailed)?;
 
@@ -334,24 +324,55 @@ fn check_supported_operations(ops: &[(&'static str, u8)]) -> Result<(), UringUns
 }
 
 lazy_static! {
-    static ref IO_URING_SUPPORT: Result<(), String> =
-        check_supported_operations(GLOMMIO_URING_OPS).map_err(|reason| reason.to_string());
+    /// The probe's verdict, once one has been reached. `None` means it has not
+    /// been, which is not the same as "not tried yet" -- see below.
+    static ref IO_URING_SUPPORT: std::sync::Mutex<Option<Result<(), String>>> =
+        std::sync::Mutex::new(None);
 }
 
-/// Returns `Err` with a description of what is wrong if this kernel cannot run
-/// glommio. Probed once per process.
+/// Whether the probe might succeed if we tried again.
+fn is_transient(err: &UringUnsupported) -> bool {
+    match err {
+        UringUnsupported::SetupFailed(err) | UringUnsupported::ProbeFailed(err) => matches!(
+            err.raw_os_error(),
+            Some(libc::EMFILE) | Some(libc::ENFILE) | Some(libc::ENOMEM)
+        ),
+        UringUnsupported::MissingOps(_) => false,
+    }
+}
+
+/// Returns `Err` describing why this kernel cannot run glommio.
+///
+/// Cached once per process, but only a definitive answer: a probe that failed
+/// for want of a descriptor is tried again.
 pub(crate) fn check_uring_support() -> io::Result<()> {
-    IO_URING_SUPPORT
-        .as_ref()
-        .map(|_| ())
-        .map_err(|reason| io::Error::new(io::ErrorKind::Unsupported, reason.clone()))
+    let unsupported = |reason: String| io::Error::new(io::ErrorKind::Unsupported, reason);
+    // A poisoned lock here carries no state worth protecting: the value behind
+    // it is a cached verdict, and a panicking prober leaves it untouched.
+    let mut cached = IO_URING_SUPPORT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    if let Some(verdict) = cached.as_ref() {
+        return verdict.clone().map_err(unsupported);
+    }
+
+    match check_supported_operations(GLOMMIO_URING_OPS) {
+        Ok(()) => {
+            *cached = Some(Ok(()));
+            Ok(())
+        }
+        Err(err) => {
+            let reason = err.to_string();
+            if !is_transient(&err) {
+                *cached = Some(Err(reason.clone()));
+            }
+            Err(unsupported(reason))
+        }
+    }
 }
 
 /// Builds the submission queue entry for one descriptor.
-///
-/// Returns an owned entry rather than filling a borrowed slot: `io-uring`
-/// separates building from pushing, which also means a chain can be built in
-/// full before any of it is committed to the ring.
 fn fill_sqe<F>(
     op: &UringDescriptor,
     buffer_allocation: F,
@@ -363,10 +384,8 @@ where
     let mut user_data = op.user_data;
     let fd = types::Fd(op.fd);
 
-    // SAFETY: every raw pointer below comes out of a `UringDescriptor` whose
-    // owning `Source` is kept alive by the `SourceMap` until the corresponding
-    // completion is reaped, which is the same contract the previous
-    // fill-in-place implementation relied on.
+    // SAFETY: every pointer below belongs to a `Source` that the `SourceMap`
+    // keeps alive until the completion is reaped.
     let entry = unsafe {
         match op.args {
             UringOpDescriptor::PollAdd(events) => {
@@ -420,10 +439,8 @@ where
                 opcode::Connect::new(fd, (*addr).as_ptr(), (*addr).len()).build()
             }
             UringOpDescriptor::LinkTimeout(timespec) => {
-                // `types::Timespec` and `__kernel_timespec` are the same two
-                // fixed-width fields in the same order, and the timespec has to
-                // outlive the SQE, so borrow the caller's rather than copying a
-                // temporary that would be dropped before submission.
+                // Borrowed, not copied: it has to outlive the SQE. Same
+                // layout as `__kernel_timespec`, asserted in `sys/mod.rs`.
                 opcode::LinkTimeout::new(timespec as *const types::Timespec).build()
             }
             UringOpDescriptor::Accept(addr) => {
@@ -438,10 +455,8 @@ where
                 .build(),
             UringOpDescriptor::StatxFd(statx_fd, statx_buf) => {
                 const EMPTY_PATH: &[u8] = b"\0";
-                // The libc crate does not define this one for musl targets.
-                // It is 0 in the kernel UAPI (`linux/stat.h`): "do whatever
-                // stat() does". Spelled out here so both libcs take the same
-                // path rather than one of them taking a cfg'd detour.
+                // Not defined by the libc crate for musl targets. 0 in the
+                // kernel UAPI (`linux/stat.h`): do whatever stat() does.
                 const AT_STATX_SYNC_AS_STAT: libc::c_int = 0;
                 let flags = AT_STATX_SYNC_AS_STAT | libc::AT_NO_AUTOMOUNT | libc::AT_EMPTY_PATH;
                 opcode::Statx::new(
@@ -588,10 +603,8 @@ where
     entry.user_data(user_data).flags(op.flags)
 }
 
-/// Turns a raw CQE result into an `io::Result`.
-///
-/// io_uring reports failure as a negative errno in the completion's result
-/// field rather than through errno itself.
+/// Turns a raw CQE result into an `io::Result`. io_uring reports failure as a
+/// negative errno in the completion, not through errno.
 fn transmute_error(res: i32) -> io::Result<usize> {
     if res >= 0 {
         return Ok(res as usize);
@@ -700,11 +713,9 @@ fn submit_event_chain(
     let now = Instant::now();
 
     while let Some(chain) = peek_one_chain(queue, ring_size) {
-        // A chain is linked with IOSQE_IO_LINK, so it is only meaningful whole:
-        // committing part of one would submit a link timeout without the
-        // operation it guards, or the reverse. Check the whole chain fits
-        // before pushing any of it, and bail if it does not so the caller
-        // flushes and retries.
+        // A linked chain is only meaningful whole -- half of one is a link
+        // timeout with no operation to guard. Bail if it doesn't fit and let
+        // the caller flush first.
         let mut sq = ring.submission();
         if sq.capacity() - sq.len() < chain.len() {
             return None;
@@ -719,9 +730,8 @@ fn submit_event_chain(
         for op in ops {
             let allocator = allocator.clone();
             let entry = fill_sqe(&op, move |size| allocator.new_buffer(size), source_map);
-            // SAFETY: the entry was just built from `op`, whose buffers and
-            // pointers are owned by sources the `SourceMap` keeps alive until
-            // the completion is reaped. The capacity check above guarantees
+            // SAFETY: `op`'s buffers belong to sources the `SourceMap` keeps
+            // alive until the completion is reaped, and the check above means
             // the push cannot fail.
             unsafe {
                 sq.push(&entry)
@@ -837,10 +847,7 @@ impl UringQueueState {
 pub(crate) trait UringCommon {
     fn submission_queue(&mut self) -> ReactorQueue;
     fn submit_sqes(&mut self) -> io::Result<usize>;
-    /// These take `&mut self` because they read the ring's submission and
-    /// completion queues, and a ring's queue accessors require exclusive
-    /// access. Keeping them exclusive here means the queues never have to be
-    /// reached through a shared-reference escape hatch.
+    /// `&mut self` because the ring's queue accessors need exclusive access.
     fn waiting_kernel_submission(&mut self) -> usize;
     #[allow(unused)]
     fn in_kernel(&self) -> usize;
@@ -1256,9 +1263,7 @@ impl SleepableRing {
             };
             let entry = fill_sqe(&op, DmaBuffer::new, &mut self.source_map.borrow_mut());
             // SAFETY: the poll targets the latency ring's fd, which outlives
-            // this reactor, and the source is held by the `SourceMap` until its
-            // completion is reaped. The emptiness check above means the push
-            // cannot fail.
+            // this reactor, and the check above means the push cannot fail.
             unsafe {
                 self.ring
                     .submission()
@@ -1280,13 +1285,10 @@ impl SleepableRing {
                 // Waiting here is unsafe because we could end up waiting much longer than
                 // needed.
                 //
-                // The entry stays queued rather than being repaired. io-uring
-                // cannot rewrite an entry once pushed, and does not need to:
-                // the poll goes out with the next submit, arms on the latency
-                // ring, and completes almost immediately, and that completion
-                // is what retires the source registration. A `LinkRings`
-                // completion wakes nobody, so the only cost is a spurious CQE.
-                // See docs/investigations/iou-replacement/sleep-failure-path.md.
+                // The entry stays queued. io-uring can't rewrite a pushed
+                // entry and doesn't need to: it goes out with the next submit
+                // and its completion retires the source. Wakes nobody, costs a
+                // spurious CQE.
                 Err(io::Error::from_raw_os_error(libc::EBUSY))
             } else {
                 // The rings are linked. Goodnight!
@@ -2120,11 +2122,9 @@ impl Reactor {
 
     pub(crate) fn preempt_status(&self) -> CompletionStatus {
         let mut lat_ring = self.latency_ring.borrow_mut();
-        // SAFETY: the status must not outlive the ring. The ring lives in
-        // `self.latency_ring`, and the `Reactor` that stores the status owns
-        // this whole structure, so it is dropped first.
-        // Bind before returning: the `CompletionQueue` is a temporary borrowing
-        // `lat_ring`, and only the owned status outlives it.
+        // SAFETY: the status must not outlive the ring, and the `Reactor` that
+        // stores it owns this whole structure. Bound to a local first because
+        // the `CompletionQueue` it comes from only borrows `lat_ring`.
         let status = unsafe { lat_ring.ring.completion().status() };
         status
     }
