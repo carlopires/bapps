@@ -27,6 +27,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # Download dependencies as the runner user, so the root steps below do
+      # not leave root-owned files in ~/.cargo.
+      - name: Fetch dependencies
+        run: cargo fetch --locked
+
       # io_uring needs locked memory, and raising the limit needs root, as in
       # core's upstream CI (core/.github/scripts/run-tests.sh).
       - name: make validate
@@ -35,8 +40,11 @@ jobs:
       - name: make integration
         run: sudo -E env "PATH=$PATH" bash -c 'ulimit -Sl 512; ulimit -Hl 512; make integration'
 
-      # cargo ran as root; give the target directory back so the cache step
-      # can save it.
-      - name: Restore ownership for the cache
+      # cargo ran as root: give target/ and ~/.cargo back so the cache step
+      # can read them, and drop trybuild's scratch directory (target/tests),
+      # which the cache's cleaner mistakes for a nested target directory.
+      - name: Prepare the cache
         if: always()
-        run: sudo chown -R "$(id -u):$(id -g)" target
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" target "$HOME/.cargo"
+          rm -rf target/tests

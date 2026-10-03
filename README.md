@@ -41,6 +41,9 @@ make integration   # multicore suite on real pinned threads
 make bench         # core benchmarks
 ```
 
+How tests are written and checked: [docs/testing.md](docs/testing.md).
+Rules for changing the repository: [AGENTS.md](AGENTS.md).
+
 ## History and upstream
 
 `core/` is where the runtime is maintained. Its history is Glommio's:

@@ -63,30 +63,10 @@ with a fresh deadline. Do not shield ordinary request work.
 
 ## 7. Test concurrency with signals, not sleeps
 
-A wall-clock sleep is a poor synchronization primitive: it hides races on a
-quiet machine and fails on a loaded one. Each rule below comes from a flaky
-test this stack actually had.
-
-- **Wait for an explicit state, never for time.** Readiness through
-  `TaskStatus`/`start`; a queue position through `CapacityLimiter::waiting`;
-  progress through an `Event`, a `Sequencer` step or a counter. Not
-  `sleep(20ms)` "so the job is queued by now".
-- **Across threads, the other side signals first.** A job on a helper thread
-  sends on a channel when it is running; an executor that hands a sender to
-  another thread waits until the receiver has connected before it exits.
-- **Prove absence structurally.** "The job never ran" is shown by its closure
-  having been dropped (`Arc::strong_count` back to one) or a channel closed,
-  not by watching for a while and seeing nothing.
-- **Time is virtual where it can be.** In `testing::Lab` sleeps cost nothing
-  and the clock jumps to the next timer; use `TestClock` to drive time by hand.
-  Real sleeps belong only inside work that the test means to cancel.
-- **Timeouts are deadlock guards, not synchronization.** Bound every wait loop
-  so a broken invariant fails the test instead of hanging it.
-- **Measure convergence, do not sample.** A count that settles (open
-  descriptors, controller shares) is awaited with a bound; a real leak never
-  converges and still fails. Do this only when you know why the value lags.
-- **Explore and break.** Run lab tests over many seeds, and check each new test
-  by breaking the code it protects and watching it fail.
+Wait for explicit states (readiness, queue positions, events, channels), never
+for time; bound every wait; prefer the deterministic lab. The full rules, each
+learned from a flaky test this stack had, are in the workspace
+[testing guide](../../docs/testing.md).
 
 ## 8. Pre-commit check
 
