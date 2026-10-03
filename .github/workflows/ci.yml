@@ -34,3 +34,9 @@ jobs:
 
       - name: make integration
         run: sudo -E env "PATH=$PATH" bash -c 'ulimit -Sl 512; ulimit -Hl 512; make integration'
+
+      # cargo ran as root; give the target directory back so the cache step
+      # can save it.
+      - name: Restore ownership for the cache
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" target
