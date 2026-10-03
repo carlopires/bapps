@@ -15,7 +15,8 @@ concurrency:
 jobs:
   validate:
     name: validate and integration
-    runs-on: ubuntu-latest
+    # Pinned: a new image brings a new kernel, which matters for io_uring.
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
