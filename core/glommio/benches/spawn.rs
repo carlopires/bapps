@@ -26,8 +26,10 @@ fn spawn(c: &mut Criterion) {
     });
 
     group.bench_function("spawn_local, detached", |b| {
-        b.to_async(&ex)
-            .iter(|| async { black_box(spawn_local(async { 1u32 }).detach()) })
+        b.to_async(&ex).iter(|| async {
+            // Measure spawn and detach only: the handle is not awaited.
+            black_box(spawn_local(async { 1u32 }).detach());
+        })
     });
 
     // A capture large enough that the task is boxed rather than stored inline.

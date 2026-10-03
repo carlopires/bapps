@@ -665,7 +665,13 @@ mod test {
 
             Timer::new(Duration::from_millis(2)).await;
             test.processed_units.set(1000 * 1000);
-            Timer::new(Duration::from_millis(2)).await;
+            // The controller adjusts every 1 ms; under load that tick can be
+            // late. Wait for it to converge rather than sampling once: a
+            // controller that never lowers the shares still fails here.
+            let deadline = std::time::Instant::now() + Duration::from_millis(500);
+            while queue.queue.shares() != 1 && std::time::Instant::now() < deadline {
+                Timer::new(Duration::from_millis(1)).await;
+            }
             assert_eq!(queue.queue.shares(), 1);
             tq.await;
         });
