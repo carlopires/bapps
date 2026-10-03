@@ -32,7 +32,7 @@ re-sync his fork with the community one (see below).
   with queues still runnable, and nothing would wake it. The pass now returns
   `Idle` or `Runnable` and the executor parks only on `Idle`, with a debug
   assertion. Community's regression test never reaches the path here, but
-  a probe counted 115,301 `Runnable` returns during RUDB's churn and restart
+  a probe counted 115,301 `Runnable` returns during a key-value service's churn and restart
   soaks: the path is hot in our workload.
 - **sysfs list without a trailing terminator** (`3c8c367`) parsed the same
   error forever; cache-domain detection discards errors, so it looped.
@@ -97,9 +97,9 @@ where the two forks implemented the same PRs differently.
 Perf: the reactor found the next timer deadline by scanning every live timer
 on every pass (`values().min()` over the expiry map). With per-request
 deadlines there are thousands of live timers, and a profile of a busy
-two-executor RUDB node spent 77% of user CPU in that scan. Timers are now also
+two-executor key-value service node spent 77% of user CPU in that scan. Timers are now also
 kept in a `BTreeSet` ordered by expiry, so the next deadline is its first
-element. On the same RUDB benchmark one executor went from ~30.6k to ~56.4k
+element. On the same benchmark one executor went from ~30.6k to ~56.4k
 requests/s. Upstream master fixes the same scan differently (wheel occupancy);
 this is the minimal change on 0.12.0.
 
