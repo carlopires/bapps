@@ -742,6 +742,7 @@ async fn run_service(
             "service task group cancelled unexpectedly ({:?})",
             cancelled.reason
         )),
+        Err(other) => ExitReason::Failure(format!("service task group failed: {other:?}")),
     }
 }
 

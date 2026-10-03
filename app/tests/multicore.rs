@@ -24,11 +24,11 @@ fn isolated_state_roundtrip_cancel_ack_and_node_shutdown() {
     let captured = cleaned.clone();
     AppBuilder::new()
         .shards(2)
-        .limits(RpcLimits {
-            max_in_flight: 2,
-            queue_capacity: 4,
-            ..RpcLimits::default()
-        })
+        .limits(
+            RpcLimits::default()
+                .with_max_in_flight(2)
+                .with_queue_capacity(4),
+        )
         .run::<Request, u64, _, _>(move |shard| {
             let id = shard.shard_id();
             let inbox = shard.inbox();
@@ -162,7 +162,9 @@ fn one_failed_shard_startup_stops_its_sibling() {
         .startup_timeout(Duration::from_secs(5))
         .run::<(), (), _, _>(|shard| async move {
             if shard.shard_id() == ShardId(1) {
-                return Err("injected shard construction failure".into());
+                return Err(bapps_app::AppError::Config(
+                    "injected shard construction failure".into(),
+                ));
             }
             let child = ChildSpec::worker("idle", |ctx, started| async move {
                 started.started(()).map_err(|e| format!("{e:?}"))?;
@@ -176,7 +178,14 @@ fn one_failed_shard_startup_stops_its_sibling() {
                 ))
                 .await
         });
-    assert!(result.is_err());
+    assert!(
+        matches!(
+            &result,
+            Err(bapps_app::AppError::ShardFailed { shard: ShardId(1), reason })
+                if reason.contains("injected shard construction failure")
+        ),
+        "{result:?}"
+    );
 }
 
 enum LossRequest {

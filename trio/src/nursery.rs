@@ -16,7 +16,7 @@ use std::{
 };
 
 use futures_lite::future::FutureExt;
-use glommio::{GlommioError, Task, channels::oneshot::oneshot, spawn_local_into};
+use glommio::{GlommioError, ResourceType, Task, channels::oneshot::oneshot, spawn_local_into};
 
 use crate::{
     LocalBoxFuture,
@@ -27,6 +27,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SpawnError {
     Closing,
     RuntimeRejected,
@@ -44,6 +45,7 @@ impl std::fmt::Display for SpawnError {
 impl std::error::Error for SpawnError {}
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum NurseryError<E> {
     Child(Rc<E>),
     Panicked,
@@ -51,6 +53,7 @@ pub enum NurseryError<E> {
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum StartError<E> {
     Spawn(SpawnError),
     Exited,
@@ -61,6 +64,7 @@ pub enum StartError<E> {
 
 /// Result of a structured stop request on an [`OwnedTask`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StopOutcome {
     /// The task observed cooperative cancellation and exited within the grace
     /// period (or had already finished).
@@ -688,13 +692,35 @@ pub struct TaskStatus<T> {
 }
 
 impl<T> TaskStatus<T> {
-    pub fn started(mut self, value: T) -> Result<(), GlommioError<T>> {
-        self.sender
-            .take()
-            .expect("TaskStatus::started called after sender was consumed")
-            .send(value)
+    /// Publish readiness with `value`.
+    ///
+    /// # Errors
+    ///
+    /// [`NoWaiter`], handing `value` back, when nobody waits for it any more
+    /// (the starter was cancelled or dropped).
+    pub fn started(self, value: T) -> Result<(), NoWaiter<T>> {
+        match self.sender {
+            Some(sender) => sender.send(value).map_err(|error| match error {
+                GlommioError::Closed(ResourceType::Channel(value)) => NoWaiter(value),
+                other => unreachable!("a oneshot send fails only when closed: {other:?}"),
+            }),
+            None => unreachable!("TaskStatus is built with a sender and consumed by started"),
+        }
     }
 }
+
+/// Readiness was published but nobody waits for it any more. Holds the
+/// value that was not delivered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoWaiter<T>(pub T);
+
+impl<T> std::fmt::Display for NoWaiter<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("nobody is waiting for this task's readiness")
+    }
+}
+
+impl<T: std::fmt::Debug> std::error::Error for NoWaiter<T> {}
 
 enum BodyOutcome<R> {
     Body(R),
@@ -739,13 +765,10 @@ where
         .await;
 
         match first {
-            BodyOutcome::Body(value) => BodyOutcome::Body(value),
-            BodyOutcome::Cancelled => {
-                // Cooperative parent cancellation: continue polling the body under
-                // the cancelled scope so cancellation-aware operations can unwind.
-                let value = body_future.await;
-                BodyOutcome::Body(value)
-            }
+            BodyOutcome::Body(value) => value,
+            // Cooperative parent cancellation: continue polling the body under
+            // the cancelled scope so cancellation-aware operations can unwind.
+            BodyOutcome::Cancelled => body_future.await,
         }
     };
 
@@ -756,10 +779,7 @@ where
     nursery.state.finished.set(true);
     result?;
 
-    match body_outcome {
-        BodyOutcome::Body(value) => Ok(value),
-        BodyOutcome::Cancelled => unreachable!(),
-    }
+    Ok(body_outcome)
 }
 
 #[cfg(test)]

@@ -21,6 +21,7 @@ use bapps_trio::{CancelScope, Cancelled, sync::Condition};
 /// still alive so it can clean up, but no longer accepting new operations and
 /// no longer advertised through the registry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum GenerationPhase {
     /// Initializing; accepts operations from services started after it.
     Starting,
@@ -54,6 +55,7 @@ struct Inner {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ServiceUnavailable {
     pub path: String,
     pub generation: u64,

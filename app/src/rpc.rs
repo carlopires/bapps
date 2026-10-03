@@ -1,5 +1,6 @@
 //! Bounded, explicit cross-core messages. This reference transport uses
 //! async-channel; it is not a claim of Glommio SPSC/NUMA-optimal performance.
+use crate::AppError;
 use crate::{ReadyGate, ShardId};
 use async_channel::{Receiver, Sender};
 use bapps_otp::{ChildContext, TaskStatus};
@@ -68,6 +69,7 @@ impl RpcClock for TrioClock {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct CallId {
     pub source: ShardId,
     pub sequence: u64,
@@ -75,6 +77,7 @@ pub struct CallId {
 
 /// Why a caller stopped waiting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Interruption {
     Cancelled,
     Deadline,
@@ -89,6 +92,7 @@ pub enum Interruption {
 /// Admitted and interrupted, effects possible: `Cancelled`, `Deadline`,
 /// `OutcomeUnknown`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CallError {
     InvalidShard(usize),
     Overloaded,
@@ -118,12 +122,42 @@ pub enum CallError {
 }
 impl fmt::Display for CallError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{self:?}")
+        let acknowledged = |acknowledged: bool| {
+            if acknowledged {
+                "the destination acknowledged it"
+            } else {
+                "the request may still be running"
+            }
+        };
+        match self {
+            Self::InvalidShard(shard) => write!(f, "no shard {shard}"),
+            Self::Overloaded => f.write_str("too many calls outstanding on this shard"),
+            Self::NodeStopping => f.write_str("the node is stopping"),
+            Self::NotAdmitted(Interruption::Cancelled) => {
+                f.write_str("cancelled before the destination admitted the request")
+            }
+            Self::NotAdmitted(Interruption::Deadline) => {
+                f.write_str("deadline passed before the destination admitted the request")
+            }
+            Self::TargetStopped => f.write_str("the destination stopped before starting it"),
+            Self::Cancelled { acknowledged: ack } => {
+                write!(f, "cancelled after admission; {}", acknowledged(*ack))
+            }
+            Self::Deadline { acknowledged: ack } => {
+                write!(f, "deadline passed after admission; {}", acknowledged(*ack))
+            }
+            Self::OutcomeUnknown => {
+                f.write_str("the handler was destroyed before finishing; its outcome is unknown")
+            }
+            Self::Remote(message) => write!(f, "the handler failed: {message}"),
+            Self::InvalidOptions(reason) => write!(f, "invalid call options: {reason}"),
+        }
     }
 }
 impl std::error::Error for CallError {}
 
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct RpcLimits {
     pub queue_capacity: usize,
     pub max_in_flight: usize,
@@ -143,18 +177,63 @@ impl Default for RpcLimits {
     }
 }
 impl RpcLimits {
-    pub fn validate(&self) -> Result<(), String> {
+    /// Check every bound is usable.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Config`] when a count is zero or a duration is zero.
+    pub fn validate(&self) -> Result<(), AppError> {
         if self.queue_capacity == 0 || self.max_in_flight == 0 || self.max_outbound == 0 {
-            return Err("RPC queue/active/outbound limits must be non-zero".into());
+            return Err(AppError::Config(
+                "RPC queue/active/outbound limits must be non-zero".into(),
+            ));
         }
         if self.max_call_duration.is_zero() || self.handler_cancel_grace.is_zero() {
-            return Err("RPC duration and handler grace must be positive".into());
+            return Err(AppError::Config(
+                "RPC duration and handler grace must be positive".into(),
+            ));
         }
         Ok(())
+    }
+
+    /// Requests that may queue for one destination shard.
+    #[must_use]
+    pub fn with_queue_capacity(mut self, value: usize) -> Self {
+        self.queue_capacity = value;
+        self
+    }
+
+    /// Handlers that may run at once on one shard's inbox.
+    #[must_use]
+    pub fn with_max_in_flight(mut self, value: usize) -> Self {
+        self.max_in_flight = value;
+        self
+    }
+
+    /// Calls one shard may have outstanding as a caller.
+    #[must_use]
+    pub fn with_max_outbound(mut self, value: usize) -> Self {
+        self.max_outbound = value;
+        self
+    }
+
+    /// Ceiling on any call, whatever its own timeout.
+    #[must_use]
+    pub fn with_max_call_duration(mut self, value: Duration) -> Self {
+        self.max_call_duration = value;
+        self
+    }
+
+    /// How long a cancelled handler may keep running to clean up.
+    #[must_use]
+    pub fn with_handler_cancel_grace(mut self, value: Duration) -> Self {
+        self.handler_cancel_grace = value;
+        self
     }
 }
 
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct CallOptions {
     pub timeout: Duration,
     /// Extra bounded time to await a terminal response after cancellation.
@@ -170,8 +249,32 @@ impl Default for CallOptions {
         }
     }
 }
+impl CallOptions {
+    /// Longest wait for this call (capped by the caller's remaining time and
+    /// by [`RpcLimits::max_call_duration`]).
+    #[must_use]
+    pub fn with_timeout(mut self, value: Duration) -> Self {
+        self.timeout = value;
+        self
+    }
+
+    /// Extra time to await a terminal reply after cancelling.
+    #[must_use]
+    pub fn with_cancellation_grace(mut self, value: Duration) -> Self {
+        self.cancellation_grace = value;
+        self
+    }
+
+    /// Scheduling class of the handler on the destination shard.
+    #[must_use]
+    pub fn with_task_class(mut self, value: TaskClass) -> Self {
+        self.task_class = value;
+        self
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default)]
+#[non_exhaustive]
 pub struct RpcMetrics {
     pub submitted: u64,
     pub completed: u64,
@@ -550,7 +653,7 @@ pub async fn serve<M, R, F, Fut>(
     started: TaskStatus<()>,
     inbox: ShardInbox<M, R>,
     handler: F,
-) -> Result<(), String>
+) -> Result<(), AppError>
 where
     M: Send + 'static,
     R: Send + 'static,
@@ -558,13 +661,13 @@ where
     Fut: Future<Output = Result<R, String>> + 'static,
 {
     if inbox.inner.leased.replace(true) {
-        return Err("shard RPC inbox already has an owner".into());
+        return Err(AppError::Config(
+            "shard RPC inbox already has an owner".into(),
+        ));
     }
     let _lease = Lease(inbox.inner.clone());
     let scope = ctx.scope();
-    started
-        .started(())
-        .map_err(|e| format!("shard-RPC readiness: {e:?}"))?;
+    started.started(()).map_err(|_| AppError::Cancelled)?;
     loop {
         while inbox.inner.counters.active.get() >= inbox.inner.limits.max_in_flight {
             let observed = inbox.inner.changed.generation();
@@ -623,7 +726,7 @@ where
                 reply.send(result);
                 Ok::<(), String>(())
             })
-            .map_err(|e| format!("shard RPC worker spawn: {e:?}"))?;
+            .map_err(|e| AppError::System(format!("shard RPC worker spawn: {e:?}")))?;
     }
 }
 

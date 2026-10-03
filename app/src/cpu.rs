@@ -1,13 +1,14 @@
 //! CPU IDs are Linux logical CPU IDs, not indices into available_parallelism.
+use crate::AppError;
 use std::{collections::BTreeSet, fs};
 
 /// Parse Linux cpulist syntax, e.g. `2-5,8,10-11`. Reject duplicates and
 /// reversed/oversized ranges rather than silently pinning several shards alike.
-pub fn parse_cpu_list(text: &str) -> Result<Vec<usize>, String> {
+pub fn parse_cpu_list(text: &str) -> Result<Vec<usize>, AppError> {
     let mut cpus = Vec::new();
     let mut seen = BTreeSet::new();
     if text.trim().is_empty() {
-        return Err("CPU list is empty".into());
+        return Err(AppError::Config("CPU list is empty".into()));
     }
     for part in text.trim().split(',') {
         let part = part.trim();
@@ -15,14 +16,15 @@ pub fn parse_cpu_list(text: &str) -> Result<Vec<usize>, String> {
             Some((a, b)) => (a.parse::<usize>(), b.parse::<usize>()),
             None => (part.parse::<usize>(), part.parse::<usize>()),
         };
-        let start = start.map_err(|_| format!("invalid CPU list item {part:?}"))?;
-        let end = end.map_err(|_| format!("invalid CPU list item {part:?}"))?;
+        let start =
+            start.map_err(|_| AppError::Config(format!("invalid CPU list item {part:?}")))?;
+        let end = end.map_err(|_| AppError::Config(format!("invalid CPU list item {part:?}")))?;
         if start > end || end - start > 65_535 {
-            return Err(format!("invalid CPU range {part:?}"));
+            return Err(AppError::Config(format!("invalid CPU range {part:?}")));
         }
         for cpu in start..=end {
             if !seen.insert(cpu) {
-                return Err(format!("duplicate CPU {cpu}"));
+                return Err(AppError::Config(format!("duplicate CPU {cpu}")));
             }
             cpus.push(cpu);
         }
@@ -32,13 +34,15 @@ pub fn parse_cpu_list(text: &str) -> Result<Vec<usize>, String> {
 
 /// Respect the calling thread's current affinity/cpuset. Do not assume CPU 0
 /// is available inside a container or under taskset.
-pub fn allowed_cpus() -> Result<Vec<usize>, String> {
+pub fn allowed_cpus() -> Result<Vec<usize>, AppError> {
     let status = fs::read_to_string("/proc/thread-self/status")
-        .map_err(|e| format!("reading calling thread CPU affinity: {e}"))?;
+        .map_err(|e| AppError::System(format!("reading calling thread CPU affinity: {e}")))?;
     let cpus = status
         .lines()
         .find_map(|line| line.strip_prefix("Cpus_allowed_list:"))
-        .ok_or("Cpus_allowed_list missing from /proc/thread-self/status")?;
+        .ok_or_else(|| {
+            AppError::System("Cpus_allowed_list missing from /proc/thread-self/status".into())
+        })?;
     parse_cpu_list(cpus)
 }
 
@@ -49,26 +53,29 @@ pub fn resolve_cpus(
     shards: usize,
     explicit: Option<&[usize]>,
     allowed: &[usize],
-) -> Result<Vec<usize>, String> {
+) -> Result<Vec<usize>, AppError> {
     if shards == 0 {
-        return Err("shards must be greater than zero".into());
+        return Err(AppError::Config("shards must be greater than zero".into()));
     }
     let cpus = explicit.map_or_else(
         || allowed.iter().copied().take(shards).collect(),
         |v| v.to_vec(),
     );
     if cpus.len() != shards {
-        return Err(format!("need {shards} distinct CPUs; got {}", cpus.len()));
+        return Err(AppError::Config(format!(
+            "need {shards} distinct CPUs; got {}",
+            cpus.len()
+        )));
     }
     let mut seen = BTreeSet::new();
     for &cpu in &cpus {
         if !allowed.contains(&cpu) {
-            return Err(format!(
+            return Err(AppError::Config(format!(
                 "CPU {cpu} is outside the calling thread's affinity"
-            ));
+            )));
         }
         if !seen.insert(cpu) {
-            return Err(format!("CPU {cpu} selected twice"));
+            return Err(AppError::Config(format!("CPU {cpu} selected twice")));
         }
     }
     Ok(cpus)

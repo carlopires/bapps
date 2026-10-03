@@ -21,6 +21,7 @@ const RECENT_LEAKS: usize = 16;
 
 /// Executor-local obligation counters.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ObligationStats {
     /// Created and not yet resolved or dropped.
     pub pending: u64,

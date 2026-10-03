@@ -5,6 +5,7 @@ use std::{rc::Rc, time::Duration};
 use glommio::{Latency, Shares, TaskQueueHandle, executor};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum TaskClass {
     Default,
     ForegroundRead,

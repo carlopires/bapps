@@ -107,6 +107,7 @@ pub async fn sleep_until(deadline: Duration) -> Result<(), Cancelled> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FailAfterError {
     TooSlow,
     Cancelled(Cancelled),
@@ -124,6 +125,7 @@ impl std::fmt::Display for FailAfterError {
 impl std::error::Error for FailAfterError {}
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct MoveOnOutcome<T> {
     pub value: Option<T>,
     pub timed_out: bool,

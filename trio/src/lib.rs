@@ -34,7 +34,7 @@ pub use cancel::{
 };
 pub use foreign::{cancel_on, cancel_on_any, cancel_on_current};
 pub use nursery::{
-    Nursery, NurseryError, NurseryHandle, OwnedTask, SpawnError, StartError, StopOutcome,
+    NoWaiter, Nursery, NurseryError, NurseryHandle, OwnedTask, SpawnError, StartError, StopOutcome,
     TaskStatus, with_nursery, with_nursery_with_queues,
 };
 pub use obligation::{Obligation, ObligationStats, obligation_stats};

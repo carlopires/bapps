@@ -14,7 +14,7 @@ use std::{future::Future, rc::Rc, sync::Arc, time::Instant};
 use bapps_trio::{Nursery, with_nursery};
 
 use crate::{
-    AppError, RpcLimits, ShardClient, ShardContext, ShardId,
+    AppError, RpcLimits, ShardClient, ShardContext, ShardId, ShardResult,
     rpc::{TrioClock, fabric},
     runtime::{HostEvent, HostSink, control_plane},
 };
@@ -31,13 +31,14 @@ where
     M: Send + 'static,
     R: Send + 'static,
     F: Fn(ShardContext<M, R>) -> Fut + 'static,
-    Fut: Future<Output = Result<(), String>> + 'static,
+    Fut: Future + 'static,
+    Fut::Output: ShardResult,
 {
     assert!(
         bapps_trio::testing::Lab::is_running(),
         "bapps_app::lab::run_node needs a running bapps_trio lab"
     );
-    limits.validate().map_err(AppError)?;
+    limits.validate()?;
     let base = Instant::now();
     let cpus = Arc::new((0..shards).collect::<Vec<_>>());
     let (senders, receivers) = fabric::<M, R>(shards, limits.queue_capacity);
@@ -76,11 +77,11 @@ where
                 let host = host_tx.clone();
                 nursery
                     .spawn(move |_| async move {
-                        let outcome = shard.await;
+                        let outcome = shard.await.into_shard_result();
                         let _ = host.try_send(HostEvent::Exited(id, outcome));
                         Ok(())
                     })
-                    .map_err(|e| AppError(format!("spawn shard {index}: {e}")))?;
+                    .map_err(|e| AppError::System(format!("spawn shard {index}: {e}")))?;
             }
             drop(host_tx);
             drop(senders);
@@ -98,23 +99,25 @@ where
                     }
                     Ok(HostEvent::Exited(id, result)) => {
                         exited += 1;
-                        if let Err(error) = result {
-                            failure.get_or_insert(error);
+                        if let Err(reason) = result {
+                            failure.get_or_insert(AppError::ShardFailed { shard: id, reason });
                         } else if !control.is_stopping() {
-                            failure
-                                .get_or_insert_with(|| format!("shard {id} exited unexpectedly"));
+                            failure.get_or_insert_with(|| AppError::ShardFailed {
+                                shard: id,
+                                reason: "exited on its own".into(),
+                            });
                         }
                         control.shutdown();
                     }
                     Err(_) => break,
                 }
             }
-            failure.map_or(Ok(()), |error| Err(AppError(error)))
+            failure.map_or(Ok(()), Err)
         })
     })
     .await;
     match result {
         Ok(outcome) => outcome,
-        Err(error) => Err(AppError(format!("lab node: {error:?}"))),
+        Err(error) => Err(AppError::System(format!("lab node: {error:?}"))),
     }
 }

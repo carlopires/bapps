@@ -5,6 +5,7 @@ use bapps_trio::{NurseryError, StartError};
 use crate::ExitReason;
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum OtpError {
     ChildStartFailed {
         child: String,

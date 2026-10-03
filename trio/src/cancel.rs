@@ -20,6 +20,7 @@ use crate::sync::wait_list::{WaitList, WaitSlot};
 
 /// Why a scope was cancelled locally or by an inherited parent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CancelReason {
     Explicit,
     Deadline,
@@ -39,6 +40,7 @@ impl std::fmt::Display for CancelReason {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Cancelled {
     pub reason: Option<CancelReason>,
 }
@@ -58,6 +60,7 @@ impl std::error::Error for Cancelled {}
 /// cancelled directly; scopes that merely inherit it report the same record
 /// with `inherited: true`. Bounded: one record per cancelled scope, no chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CancelCause {
     pub reason: CancelReason,
     /// Who initiated it, when the canceller said so (see

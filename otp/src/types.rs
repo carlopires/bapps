@@ -3,6 +3,7 @@ use std::{fmt, time::Duration};
 use bapps_trio::TaskClass;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Strategy {
     OneForOne,
     OneForAll,
@@ -26,6 +27,7 @@ pub enum ChildType {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Shutdown {
     /// Request cooperative cancellation, wait this long, then force-abort the
     /// same nursery-owned task if it still has not returned.
@@ -42,9 +44,21 @@ impl Default for Shutdown {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RestartIntensity {
     pub max_restarts: usize,
     pub within: Duration,
+}
+
+impl RestartIntensity {
+    /// Allow at most `max_restarts` restarts within any `within` window;
+    /// one more escalates to the parent.
+    pub fn new(max_restarts: usize, within: Duration) -> Self {
+        Self {
+            max_restarts,
+            within,
+        }
+    }
 }
 
 impl Default for RestartIntensity {
@@ -57,6 +71,7 @@ impl Default for RestartIntensity {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ExitReason {
     Normal,
     Shutdown,
@@ -94,6 +109,7 @@ impl fmt::Display for ExitReason {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum NodeStatus {
     Starting,
     Running,
@@ -103,6 +119,7 @@ pub enum NodeStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct MailboxSnapshot {
     pub name: String,
     pub depth: usize,
@@ -114,6 +131,7 @@ pub struct MailboxSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ExitRecord {
     pub generation: u64,
     pub at: Duration,
@@ -125,6 +143,7 @@ pub struct ExitRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ChildSnapshot {
     pub path: String,
     pub parent: String,
@@ -146,6 +165,7 @@ pub struct ChildSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SupervisorSnapshot {
     pub path: String,
     pub parent: Option<String>,
@@ -160,6 +180,7 @@ pub struct SupervisorSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TreeNodeSnapshot {
     Supervisor(SupervisorSnapshot),
     Child(ChildSnapshot),

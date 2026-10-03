@@ -13,6 +13,7 @@ use bapps_trio::{CancelScope, Cancelled, sync::Condition, with_cancel_scope};
 use crate::{ExitReason, types::MailboxSnapshot};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MailboxError {
     Closed,
     Cancelled(Cancelled),

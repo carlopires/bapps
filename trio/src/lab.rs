@@ -58,6 +58,7 @@ pub(crate) fn is_active() -> bool {
 
 /// Configuration for one lab run.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct LabConfig {
     /// Scheduling seed.
     pub seed: u64,
@@ -72,10 +73,19 @@ impl LabConfig {
             max_steps: 1_000_000,
         }
     }
+
+    /// Stop a run after this many task polls (a livelock guard; default one
+    /// million).
+    #[must_use]
+    pub fn with_max_steps(mut self, max_steps: u64) -> Self {
+        self.max_steps = max_steps;
+        self
+    }
 }
 
 /// Outcome of one lab run.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct LabReport<T> {
     pub seed: u64,
     /// The root future's output, when it finished.

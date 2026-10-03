@@ -27,11 +27,61 @@ impl fmt::Display for ShardId {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct AppError(pub String);
+/// What a shard's future may finish with: `Ok(())`, or `Err` of any error
+/// that can be displayed (a `String`, an [`AppError`] from
+/// [`ShardContext::run_application`], an application's own error type). The
+/// error is reported as [`AppError::ShardFailed`].
+pub trait ShardResult {
+    /// The outcome, with the error rendered for the node's report.
+    ///
+    /// # Errors
+    ///
+    /// The rendered error, when the shard failed.
+    fn into_shard_result(self) -> Result<(), String>;
+}
+
+impl<E: fmt::Display> ShardResult for Result<(), E> {
+    fn into_shard_result(self) -> Result<(), String> {
+        self.map_err(|error| error.to_string())
+    }
+}
+
+/// Why a node could not start, or stopped abnormally.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AppError {
+    /// Invalid configuration: RPC limits, timeouts, CPU selection.
+    Config(String),
+    /// The operating system refused something the node needs (reading CPU
+    /// affinity, spawning an executor thread).
+    System(String),
+    /// Not every shard became ready within the startup timeout.
+    StartupTimeout(Duration),
+    /// A shard's application failed, panicked or exited on its own; the
+    /// whole node was stopped. The first failure is reported.
+    ShardFailed {
+        /// The shard that failed first.
+        shard: ShardId,
+        /// What it reported.
+        reason: String,
+    },
+    /// The node stopped before (or while) becoming ready.
+    NodeStopped,
+    /// The caller's wait was cancelled.
+    Cancelled,
+}
 impl fmt::Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+        match self {
+            Self::Config(reason) => write!(f, "invalid configuration: {reason}"),
+            Self::System(reason) => write!(f, "system error: {reason}"),
+            Self::StartupTimeout(after) => {
+                write!(f, "not every shard became ready within {after:?}")
+            }
+            Self::ShardFailed { shard, reason } => write!(f, "shard {shard} failed: {reason}"),
+            Self::NodeStopped => f.write_str("the node stopped before becoming ready"),
+            Self::Cancelled => f.write_str("cancelled"),
+        }
     }
 }
 impl std::error::Error for AppError {}
@@ -86,11 +136,11 @@ impl ReadyGate {
     pub async fn wait(&self, scope: &CancelScope) -> Result<(), AppError> {
         let _ = cancel_on(scope, self.signal.recv())
             .await
-            .map_err(|_| AppError("startup wait cancelled".into()))?;
+            .map_err(|_| AppError::Cancelled)?;
         if self.control.shared.phase.load(Ordering::Acquire) == RUNNING {
             Ok(())
         } else {
-            Err(AppError("node stopped before/during readiness".into()))
+            Err(AppError::NodeStopped)
         }
     }
 }
@@ -191,7 +241,7 @@ impl<M: Send + 'static, R: Send + 'static> ShardContext<M, R> {
     /// Run one local OTP root and join its shutdown before the executor exits.
     /// The host barrier opens only after *all* calls to `run_started` succeed.
     /// Service panics belong to OTP; an exhausted root shuts down the node.
-    pub async fn run_application(self, application: Application) -> Result<(), String> {
+    pub async fn run_application(self, application: Application) -> Result<(), AppError> {
         let queues = TaskQueues::storage_defaults();
         let queues_for_app = queues.clone();
         let shutdown = CancelScope::new();
@@ -238,9 +288,13 @@ impl<M: Send + 'static, R: Send + 'static> ShardContext<M, R> {
         })
         .await;
         match result {
-            Ok(body) => body,
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(reason)) => Err(AppError::ShardFailed { shard: id, reason }),
             Err(bapps_trio::NurseryError::Cancelled(_)) if self.control.is_stopping() => Ok(()),
-            Err(error) => Err(format!("shard {id} application: {error:?}")),
+            Err(error) => Err(AppError::ShardFailed {
+                shard: id,
+                reason: format!("application: {error:?}"),
+            }),
         }
     }
 }
@@ -301,20 +355,18 @@ impl AppBuilder {
         M: Send + 'static,
         R: Send + 'static,
         F: Fn(ShardContext<M, R>) -> Fut + Clone + Send + 'static,
-        Fut: Future<Output = Result<(), String>> + 'static,
+        Fut: Future + 'static,
+        Fut::Output: ShardResult,
     {
-        self.limits.validate().map_err(AppError)?;
+        self.limits.validate()?;
         if self.startup_timeout.is_zero() {
-            return Err(AppError("startup timeout must be positive".into()));
+            return Err(AppError::Config("startup timeout must be positive".into()));
         }
-        let cpus = Arc::new(
-            resolve_cpus(
-                self.shards,
-                self.cpus.as_deref(),
-                &allowed_cpus().map_err(AppError)?,
-            )
-            .map_err(AppError)?,
-        );
+        let cpus = Arc::new(resolve_cpus(
+            self.shards,
+            self.cpus.as_deref(),
+            &allowed_cpus()?,
+        )?);
         let (senders, receivers) =
             crate::rpc::fabric::<M, R>(self.shards, self.limits.queue_capacity);
         let mut stops = Vec::new();
@@ -373,7 +425,7 @@ impl AppBuilder {
                         stop,
                         host: HostSink::Thread(host.clone()),
                     };
-                    executor.run(factory(context))
+                    executor.run(async move { factory(context).await.into_shard_result() })
                 }))
                 .unwrap_or_else(|payload| {
                     let text = payload
@@ -392,7 +444,7 @@ impl AppBuilder {
                     for handle in threads {
                         let _ = handle.join();
                     }
-                    return Err(AppError(format!("spawning shard {index}: {error}")));
+                    return Err(AppError::System(format!("spawning shard {index}: {error}")));
                 }
             }
         }
@@ -406,10 +458,21 @@ impl AppBuilder {
             let was_stopping = control.is_stopping();
             let all_ready = ready.iter().all(|value| *value);
             let event = if all_ready || was_stopping {
-                host_rx.recv().map_err(|e| e.to_string())
+                host_rx
+                    .recv()
+                    .map_err(|_| AppError::System("every shard's event channel closed".into()))
             } else {
                 let remaining = self.startup_timeout.saturating_sub(started.elapsed());
-                host_rx.recv_timeout(remaining).map_err(|e| e.to_string())
+                host_rx
+                    .recv_timeout(remaining)
+                    .map_err(|error| match error {
+                        mpsc::RecvTimeoutError::Timeout => {
+                            AppError::StartupTimeout(self.startup_timeout)
+                        }
+                        mpsc::RecvTimeoutError::Disconnected => {
+                            AppError::System("every shard's event channel closed".into())
+                        }
+                    })
             };
             match event {
                 Ok(HostEvent::Ready(id)) => {
@@ -420,15 +483,18 @@ impl AppBuilder {
                 }
                 Ok(HostEvent::Exited(id, result)) => {
                     exited += 1;
-                    if let Err(error) = result {
-                        failure.get_or_insert(error);
+                    if let Err(reason) = result {
+                        failure.get_or_insert(AppError::ShardFailed { shard: id, reason });
                     } else if !control.is_stopping() {
-                        failure.get_or_insert_with(|| format!("shard {id} exited unexpectedly"));
+                        failure.get_or_insert_with(|| AppError::ShardFailed {
+                            shard: id,
+                            reason: "exited on its own".into(),
+                        });
                     }
                     control.shutdown();
                 }
                 Err(error) => {
-                    failure.get_or_insert_with(|| format!("startup/event coordination: {error}"));
+                    failure.get_or_insert(error);
                     control.shutdown();
                     // On timeout, drain exits; disconnected means no more events.
                     if was_stopping || all_ready {
@@ -439,9 +505,9 @@ impl AppBuilder {
         }
         for handle in threads {
             if handle.join().is_err() {
-                failure.get_or_insert("executor thread join failed".into());
+                failure.get_or_insert(AppError::System("executor thread join failed".into()));
             }
         }
-        failure.map_or(Ok(()), |error| Err(AppError(error)))
+        failure.map_or(Ok(()), Err)
     }
 }

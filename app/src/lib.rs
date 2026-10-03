@@ -18,4 +18,6 @@ pub use rpc::{
     CallError, CallId, CallOptions, Interruption, RpcLimits, RpcMetrics, ShardClient, ShardInbox,
     serve,
 };
-pub use runtime::{AppBuilder, AppError, NodeControl, ReadyGate, ShardContext, ShardId};
+pub use runtime::{
+    AppBuilder, AppError, NodeControl, ReadyGate, ShardContext, ShardId, ShardResult,
+};
