@@ -1,0 +1,6 @@
+# The whole workspace builds with the toolchain core pins upstream
+# (core/rust-toolchain.toml): compile-fail snapshots and lints depend on it.
+[toolchain]
+channel = "1.92.0"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

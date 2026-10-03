@@ -1,0 +1,18 @@
+[package]
+name = "bapps-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Opinionated native-Rust application framework for shard-per-core services: services own state, nurseries own concurrent work, pinned CPU shards own execution, with bounded cross-shard RPC"
+license.workspace = true
+publish = false
+
+[lib]
+name = "bapps_app"
+
+[dependencies]
+glommio.workspace = true
+bapps-trio.workspace = true
+bapps-otp.workspace = true
+futures-lite = "2.6"
+async-channel = "2.5"

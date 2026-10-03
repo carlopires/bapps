@@ -1,0 +1,21 @@
+[package]
+name = "bapps-otp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "OTP-shaped supervision and service lifecycle for Glommio, built on bapps-trio"
+license.workspace = true
+keywords = ["glommio", "otp", "supervision", "structured-concurrency"]
+categories = ["asynchronous", "concurrency"]
+publish = false
+
+[lib]
+name = "bapps_otp"
+path = "src/lib.rs"
+
+[dependencies]
+bapps-trio.workspace = true
+futures-lite = "2.6"
+
+[dev-dependencies]
+glommio.workspace = true

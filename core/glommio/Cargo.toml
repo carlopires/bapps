@@ -10,12 +10,17 @@ edition = "2021"
 homepage = "https://github.com/glommio/glommio"
 keywords = ["async", "iouring", "linux", "rust", "thread-per-core"]
 license = "Apache-2.0 OR MIT"
-name = "glommio"
+name = "bapps-core"
 readme = "../README.md"
 repository = "https://github.com/glommio/glommio"
 version = "0.10.0"
 # This is also documented in the README.md under "Supported Rust Versions"
 rust-version = "1.92"
+
+# The library keeps the name `glommio`: its own tests, examples and the code
+# glommio-macros generates all refer to `::glommio`.
+[lib]
+name = "glommio"
 
 [features]
 default   = ["macros"]
@@ -47,7 +52,7 @@ crossbeam             = "0.8"
 enclose               = "1.2"
 flume                 = { version = "0.12", features = ["async"] }
 futures-lite          = "2.6"
-glommio-macros        = { version = "0.10.0", path = "../glommio-macros", optional = true }
+glommio-macros        = { package = "bapps-core-macros", version = "0.10.0", path = "../glommio-macros", optional = true }
 intrusive-collections = "0.10"
 io-uring              = "0.7.14"
 lazy_static           = "1.5"
@@ -166,13 +171,3 @@ name    = "tokio_tcp"
 [[bench]]
 harness = false
 name    = "udp"
-
-[profile.bench]
-# Thin LTO for faster compile times while still getting cross-crate optimizations
-lto = "thin"
-# Single codegen unit for more consistent performance (no parallel codegen variance)
-codegen-units = 1
-# Maximum optimization level
-opt-level = 3
-# Include debug info for profiling (doesn't affect performance)
-debug = true

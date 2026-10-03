@@ -1,0 +1,32 @@
+[workspace]
+resolver = "3"
+members = ["core/glommio", "core/glommio-macros", "trio", "otp", "app"]
+# The runtime's examples package keeps its own heavy dev-dependencies (tokio,
+# benchmarks); build it from `core/` when needed.
+exclude = ["core/examples"]
+
+[workspace.package]
+# One version for the platform crates. `core` keeps the glommio fork's own
+# version line (see core/CHANGELOG.md) so upstream merges stay simple.
+version = "0.6.0"
+edition = "2024"
+rust-version = "1.92"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/carlopires/bapps"
+
+[workspace.dependencies]
+glommio = { package = "bapps-core", path = "core/glommio", default-features = false }
+bapps-trio = { version = "=0.6.0", path = "trio" }
+bapps-otp = { version = "=0.6.0", path = "otp" }
+bapps-app = { version = "=0.6.0", path = "app" }
+
+# Moved from core/glommio, where a non-root profile was ignored.
+[profile.bench]
+# Thin LTO for faster compile times while still getting cross-crate optimizations
+lto = "thin"
+# Single codegen unit for more consistent performance (no parallel codegen variance)
+codegen-units = 1
+# Maximum optimization level
+opt-level = 3
+# Include debug info for profiling (doesn't affect performance)
+debug = true

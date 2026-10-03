@@ -1,0 +1,24 @@
+[package]
+name = "bapps-trio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Trio-shaped structured concurrency for Glommio thread-per-core applications"
+license.workspace = true
+keywords = ["glommio", "structured-concurrency", "trio", "io-uring"]
+categories = ["asynchronous", "concurrency"]
+publish = false
+
+[lib]
+name = "bapps_trio"
+path = "src/lib.rs"
+
+[dependencies]
+# glommio-ng 0.12.0 plus a descriptor-leak fix (a dropped listener could leak
+# an accepted socket), from the carlopires fork's cp/0.12 branch. The crate is
+# named `glommio` there, so application code is unchanged.
+glommio.workspace = true
+futures-lite = "2.6"
+task-local = "0.1.1"
+
+[dev-dependencies]
