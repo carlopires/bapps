@@ -17,6 +17,7 @@
 //! This repository is educational. It is not a production-hardened runtime.
 
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 mod cancel;
 mod foreign;

@@ -48,14 +48,18 @@ impl CapacityLimiter {
         }
     }
 
+    /// Tokens in the pool.
     pub fn total_tokens(&self) -> usize {
         self.inner.total.get()
     }
 
+    /// Tokens currently held.
     pub fn borrowed_tokens(&self) -> usize {
         self.inner.borrowed.get()
     }
 
+    /// Tokens free now (zero while more are held than the total, after a
+    /// shrink).
     pub fn available_tokens(&self) -> usize {
         self.total_tokens().saturating_sub(self.borrowed_tokens())
     }

@@ -17,19 +17,26 @@ use crate::{
     sync::wait_list::{WaitList, WaitSlot},
 };
 
+/// A shared, executor-local clock.
 pub type ClockRef = Rc<dyn Clock>;
 
+/// A time source: real in production, virtual in tests ([`crate::testing::TestClock`],
+/// the lab). Times are durations since the clock's origin.
 pub trait Clock {
+    /// The current time.
     fn now(&self) -> Duration;
+    /// A future that completes once [`Self::now`] reaches `deadline`.
     fn sleep_until(&self, deadline: Duration) -> Pin<Box<dyn Future<Output = ()> + 'static>>;
 }
 
+/// The monotonic clock, with Glommio timers. The default clock.
 #[derive(Clone)]
 pub struct RealClock {
     origin: Instant,
 }
 
 impl RealClock {
+    /// A clock whose origin is now.
     pub fn new() -> Self {
         Self {
             origin: Instant::now(),
@@ -66,12 +73,15 @@ thread_local! {
     static DEFAULT_CLOCK: ClockRef = Rc::new(RealClock::new());
 }
 
+/// The clock of the current task: the one set by [`with_clock`] or the lab,
+/// or the executor's [`RealClock`].
 pub fn current_clock() -> ClockRef {
     CURRENT_CLOCK
         .try_get()
         .unwrap_or_else(|_| DEFAULT_CLOCK.with(|clock| clock.clone()))
 }
 
+/// Run `future` with `clock` as its current clock.
 pub async fn with_clock<F, T>(clock: ClockRef, future: F) -> T
 where
     F: Future<Output = T>,
@@ -79,12 +89,22 @@ where
     CURRENT_CLOCK.scope(clock, future).await
 }
 
+/// Sleep for `duration` on the current clock.
+///
+/// # Errors
+///
+/// [`Cancelled`] when the current cancel scope is cancelled first.
 pub async fn sleep(duration: Duration) -> Result<(), Cancelled> {
     let clock = current_clock();
     let deadline = clock.now().saturating_add(duration);
     sleep_until(deadline).await
 }
 
+/// Sleep until `deadline` on the current clock.
+///
+/// # Errors
+///
+/// [`Cancelled`] when the current cancel scope is cancelled first.
 pub async fn sleep_until(deadline: Duration) -> Result<(), Cancelled> {
     let clock = current_clock();
     let mut timer = clock.sleep_until(deadline);
@@ -106,10 +126,13 @@ pub async fn sleep_until(deadline: Duration) -> Result<(), Cancelled> {
     .await
 }
 
+/// Why [`fail_after`] or [`fail_at`] returned without the body's value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FailAfterError {
+    /// The deadline passed first; the body was cancelled and has finished.
     TooSlow,
+    /// An enclosing scope was cancelled first.
     Cancelled(Cancelled),
 }
 
@@ -124,11 +147,15 @@ impl std::fmt::Display for FailAfterError {
 
 impl std::error::Error for FailAfterError {}
 
+/// Result of [`move_on_after`] or [`move_on_at`].
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct MoveOnOutcome<T> {
+    /// The body's value, if it finished in time.
     pub value: Option<T>,
+    /// The deadline passed first.
     pub timed_out: bool,
+    /// An enclosing scope was cancelled first.
     pub cancelled: bool,
 }
 
@@ -307,14 +334,17 @@ struct TestClockInner {
 }
 
 impl TestClock {
+    /// A clock at time zero that only moves when told to.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// This clock as a [`ClockRef`], for [`with_clock`].
     pub fn shared(&self) -> ClockRef {
         Rc::new(self.clone())
     }
 
+    /// Move time forward by `delta`, waking the sleepers now due.
     pub fn advance(&self, delta: Duration) {
         self.set(self.inner.now.get().saturating_add(delta));
     }
@@ -324,6 +354,7 @@ impl TestClock {
         self.inner.sleepers.min_value()
     }
 
+    /// Set the time to `now`, waking the sleepers now due.
     pub fn set(&self, now: Duration) {
         self.inner.now.set(now);
         self.inner.sleepers.wake_if(|deadline| *deadline <= now);

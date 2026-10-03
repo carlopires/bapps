@@ -4,15 +4,25 @@ use std::{rc::Rc, time::Duration};
 
 use glommio::{Latency, Shares, TaskQueueHandle, executor};
 
+/// What kind of work a task does, which decides its scheduling queue (its
+/// share of the executor and its latency target). Separate from ownership: a
+/// nursery decides how long a task lives, its class how it is scheduled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum TaskClass {
+    /// The queue the executor started with.
     Default,
+    /// Client-facing reads: the largest share, 1 ms latency target.
     ForegroundRead,
+    /// Client-facing writes: a large share, 2 ms latency target.
     ForegroundWrite,
+    /// Replication traffic: half the foreground share, 5 ms latency target.
     Replication,
+    /// Repair (anti-entropy, hint delivery): a small share, no latency target.
     Repair,
+    /// Compaction: a smaller share, no latency target.
     Compaction,
+    /// Everything else in the background: the smallest share.
     Maintenance,
 }
 
@@ -37,6 +47,7 @@ struct QueueSet {
 }
 
 impl TaskQueues {
+    /// Every class mapped to the executor's current queue: no prioritisation.
     pub fn current() -> Self {
         if crate::lab::is_active() {
             return Self { inner: None };

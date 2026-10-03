@@ -25,7 +25,9 @@ const RECENT_LEAKS: usize = 16;
 pub struct ObligationStats {
     /// Created and not yet resolved or dropped.
     pub pending: u64,
+    /// Obligations resolved with [`Obligation::commit`].
     pub committed: u64,
+    /// Obligations resolved with [`Obligation::abort`].
     pub aborted: u64,
     /// Dropped without a decision.
     pub leaked: u64,
@@ -56,6 +58,7 @@ pub struct Obligation {
 }
 
 impl Obligation {
+    /// Open an obligation; `label` names it in the ledger and in leak reports.
     pub fn new(label: &'static str) -> Self {
         record(|ledger| ledger.pending += 1);
         Self {
@@ -64,6 +67,7 @@ impl Obligation {
         }
     }
 
+    /// The label given to [`Self::new`].
     pub fn label(&self) -> &'static str {
         self.label
     }

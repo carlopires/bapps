@@ -22,14 +22,17 @@ struct Inner {
 }
 
 impl Event {
+    /// An event that is not set.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Whether [`Self::set`] was called.
     pub fn is_set(&self) -> bool {
         self.inner.set.get()
     }
 
+    /// Set the event and wake every waiter. Setting is permanent.
     pub fn set(&self) {
         if self.inner.set.replace(true) {
             return;
@@ -57,6 +60,8 @@ impl Event {
     }
 }
 
+/// Future of [`Event::wait`]: completes when the event is set, or with
+/// [`Cancelled`](crate::Cancelled).
 pub struct EventWait {
     event: Event,
     slot: WaitSlot,

@@ -22,14 +22,17 @@ struct Inner {
 }
 
 impl Condition {
+    /// A condition at generation zero.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// The current generation; read it before checking the state you wait on.
     pub fn generation(&self) -> u64 {
         self.inner.generation.get()
     }
 
+    /// Advance the generation and wake every waiter.
     pub fn notify_all(&self) {
         self.inner
             .generation
@@ -37,6 +40,8 @@ impl Condition {
         self.inner.waiters.wake_all();
     }
 
+    /// Wait until the generation differs from `observed`. Cancellable through
+    /// the current cancel scope; a dropped wait releases its registration.
     pub fn wait_for_change(&self, observed: u64) -> ConditionWait {
         ConditionWait {
             condition: self.clone(),
@@ -47,6 +52,8 @@ impl Condition {
     }
 }
 
+/// Future of [`Condition::wait_for_change`]: the new generation, or
+/// [`Cancelled`](crate::Cancelled).
 pub struct ConditionWait {
     condition: Condition,
     observed: u64,

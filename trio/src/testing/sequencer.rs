@@ -24,14 +24,17 @@ struct Inner {
 }
 
 impl Sequencer {
+    /// A sequencer at step zero.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// The current step.
     pub fn step(&self) -> u64 {
         self.inner.step.get()
     }
 
+    /// Move to the next step and wake the tasks waiting for it; returns it.
     pub fn advance(&self) -> u64 {
         let next = self.inner.step.get().wrapping_add(1);
         self.inner.step.set(next);
@@ -39,6 +42,8 @@ impl Sequencer {
         next
     }
 
+    /// Wait until the step reaches `target`. Cancellable through the current
+    /// cancel scope.
     pub fn wait_for(&self, target: u64) -> WaitFor {
         WaitFor {
             sequencer: self.clone(),
@@ -49,6 +54,7 @@ impl Sequencer {
     }
 }
 
+/// Future of [`Sequencer::wait_for`].
 pub struct WaitFor {
     sequencer: Sequencer,
     target: u64,

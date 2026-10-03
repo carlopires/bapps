@@ -26,10 +26,14 @@ use crate::{
     time::{ClockRef, current_clock, with_clock},
 };
 
+/// Why a task could not be added to a nursery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SpawnError {
+    /// The nursery is closing (its body finished with an error, or it was
+    /// cancelled) and admits no new tasks.
     Closing,
+    /// The executor refused to spawn the task.
     RuntimeRejected,
 }
 
@@ -44,21 +48,33 @@ impl std::fmt::Display for SpawnError {
 
 impl std::error::Error for SpawnError {}
 
+/// Why a nursery failed. A nursery fails with the first child error; later
+/// ones are dropped, since their siblings were already being cancelled.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum NurseryError<E> {
+    /// A child returned this error (shared: the error is also reported to
+    /// whoever else observes the failure).
     Child(Rc<E>),
+    /// A child panicked.
     Panicked,
+    /// The nursery's scope was cancelled from outside.
     Cancelled(Cancelled),
 }
 
+/// Why [`Nursery::start`] returned without the child's readiness value.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum StartError<E> {
+    /// The child could not be spawned.
     Spawn(SpawnError),
+    /// The child finished without calling [`TaskStatus::started`].
     Exited,
+    /// The child failed with this error before reporting readiness.
     Child(Rc<E>),
+    /// The child panicked before reporting readiness.
     Panicked,
+    /// The nursery was cancelled before the child reported readiness.
     Cancelled(Cancelled),
 }
 
@@ -265,10 +281,12 @@ pub struct OwnedTask<E> {
 }
 
 impl<E: 'static> OwnedTask<E> {
+    /// This task's cancel scope.
     pub fn cancellation_scope(&self) -> CancelScope {
         self.scope.clone()
     }
 
+    /// Whether the task has finished.
     pub fn is_finished(&self) -> bool {
         self.control.finished.get()
     }
@@ -382,20 +400,31 @@ impl<E: 'static> Nursery<E> {
         }
     }
 
+    /// A cloneable handle for spawning into this nursery later or from other
+    /// tasks; it cannot outlive the nursery's ability to admit tasks.
     pub fn handle(&self) -> NurseryHandle<E> {
         NurseryHandle {
             state: self.state.clone(),
         }
     }
 
+    /// The nursery's cancel scope: cancelling it cancels every child.
     pub fn cancellation_scope(&self) -> CancelScope {
         self.state.root_scope.clone()
     }
 
+    /// Children still running.
     pub fn active_tasks(&self) -> usize {
         self.state.active.get()
     }
 
+    /// Spawn `task` as a child, scheduled in the current queue. The task gets
+    /// its cancel scope; an `Err` it returns fails the nursery and cancels its
+    /// siblings.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError`] when the nursery is closing or the executor refuses.
     pub fn spawn<F, Fut>(&self, task: F) -> Result<(), SpawnError>
     where
         F: FnOnce(CancelScope) -> Fut + 'static,
@@ -404,6 +433,11 @@ impl<E: 'static> Nursery<E> {
         self.spawn_into(TaskClass::Default, task)
     }
 
+    /// Like `spawn`, scheduled in the queue of `class`.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError`] when the nursery is closing or the executor refuses.
     pub fn spawn_into<F, Fut>(&self, class: TaskClass, task: F) -> Result<(), SpawnError>
     where
         F: FnOnce(CancelScope) -> Fut + 'static,
@@ -412,6 +446,12 @@ impl<E: 'static> Nursery<E> {
         self.handle().spawn_into(class, task)
     }
 
+    /// Like `spawn`, also returning an [`OwnedTask`] to stop this child
+    /// individually (cooperatively, or forcefully after a grace period).
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError`] when the nursery is closing or the executor refuses.
     pub fn spawn_owned<F, Fut>(&self, task: F) -> Result<OwnedTask<E>, SpawnError>
     where
         F: FnOnce(CancelScope) -> Fut + 'static,
@@ -420,6 +460,11 @@ impl<E: 'static> Nursery<E> {
         self.spawn_owned_into(TaskClass::Default, task)
     }
 
+    /// Like `spawn_owned`, scheduled in the queue of `class`.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError`] when the nursery is closing or the executor refuses.
     pub fn spawn_owned_into<F, Fut>(
         &self,
         class: TaskClass,
@@ -432,6 +477,14 @@ impl<E: 'static> Nursery<E> {
         self.handle().spawn_owned_into(class, task)
     }
 
+    /// Spawn `task` and wait until it reports readiness with
+    /// [`TaskStatus::started`]; returns the value it reported. The task keeps
+    /// running in the nursery afterwards.
+    ///
+    /// # Errors
+    ///
+    /// [`StartError`]: the spawn failed, or the task exited, failed, panicked or
+    /// was cancelled before reporting readiness.
     pub async fn start<T, F, Fut>(&self, task: F) -> Result<T, StartError<E>>
     where
         T: 'static,
@@ -441,6 +494,11 @@ impl<E: 'static> Nursery<E> {
         self.handle().start(task).await
     }
 
+    /// Like `start`, scheduled in the queue of `class`.
+    ///
+    /// # Errors
+    ///
+    /// As for `start`.
     pub async fn start_into<T, F, Fut>(&self, class: TaskClass, task: F) -> Result<T, StartError<E>>
     where
         T: 'static,
@@ -450,6 +508,11 @@ impl<E: 'static> Nursery<E> {
         self.handle().start_into(class, task).await
     }
 
+    /// Like `start`, also returning an [`OwnedTask`] for the started child.
+    ///
+    /// # Errors
+    ///
+    /// As for `start`.
     pub async fn start_owned<T, F, Fut>(&self, task: F) -> Result<(T, OwnedTask<E>), StartError<E>>
     where
         T: 'static,
@@ -459,6 +522,11 @@ impl<E: 'static> Nursery<E> {
         self.handle().start_owned(task).await
     }
 
+    /// Like `start_owned`, scheduled in the queue of `class`.
+    ///
+    /// # Errors
+    ///
+    /// As for `start`.
     pub async fn start_owned_into<T, F, Fut>(
         &self,
         class: TaskClass,
@@ -510,20 +578,32 @@ impl<E> Drop for Nursery<E> {
     }
 }
 
+/// A cloneable way to spawn into a [`Nursery`] from elsewhere (another task,
+/// a service). Spawning fails with [`SpawnError::Closing`] once the nursery
+/// admits no new tasks.
 #[derive(Clone)]
 pub struct NurseryHandle<E> {
     state: Rc<NurseryState<E>>,
 }
 
 impl<E: 'static> NurseryHandle<E> {
+    /// The nursery's cancel scope: cancelling it cancels every child.
     pub fn cancellation_scope(&self) -> CancelScope {
         self.state.root_scope.clone()
     }
 
+    /// Children still running.
     pub fn active_tasks(&self) -> usize {
         self.state.active.get()
     }
 
+    /// Spawn `task` as a child, scheduled in the current queue. The task gets
+    /// its cancel scope; an `Err` it returns fails the nursery and cancels its
+    /// siblings.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError`] when the nursery is closing or the executor refuses.
     pub fn spawn<F, Fut>(&self, task: F) -> Result<(), SpawnError>
     where
         F: FnOnce(CancelScope) -> Fut + 'static,
@@ -532,6 +612,11 @@ impl<E: 'static> NurseryHandle<E> {
         self.spawn_into(TaskClass::Default, task)
     }
 
+    /// Like `spawn`, scheduled in the queue of `class`.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError`] when the nursery is closing or the executor refuses.
     pub fn spawn_into<F, Fut>(&self, class: TaskClass, task: F) -> Result<(), SpawnError>
     where
         F: FnOnce(CancelScope) -> Fut + 'static,
@@ -541,6 +626,12 @@ impl<E: 'static> NurseryHandle<E> {
         Ok(())
     }
 
+    /// Like `spawn`, also returning an [`OwnedTask`] to stop this child
+    /// individually (cooperatively, or forcefully after a grace period).
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError`] when the nursery is closing or the executor refuses.
     pub fn spawn_owned<F, Fut>(&self, task: F) -> Result<OwnedTask<E>, SpawnError>
     where
         F: FnOnce(CancelScope) -> Fut + 'static,
@@ -549,6 +640,11 @@ impl<E: 'static> NurseryHandle<E> {
         self.spawn_owned_into(TaskClass::Default, task)
     }
 
+    /// Like `spawn_owned`, scheduled in the queue of `class`.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError`] when the nursery is closing or the executor refuses.
     pub fn spawn_owned_into<F, Fut>(
         &self,
         class: TaskClass,
@@ -608,6 +704,14 @@ impl<E: 'static> NurseryHandle<E> {
         }
     }
 
+    /// Spawn `task` and wait until it reports readiness with
+    /// [`TaskStatus::started`]; returns the value it reported. The task keeps
+    /// running in the nursery afterwards.
+    ///
+    /// # Errors
+    ///
+    /// [`StartError`]: the spawn failed, or the task exited, failed, panicked or
+    /// was cancelled before reporting readiness.
     pub async fn start<T, F, Fut>(&self, task: F) -> Result<T, StartError<E>>
     where
         T: 'static,
@@ -617,6 +721,11 @@ impl<E: 'static> NurseryHandle<E> {
         self.start_into(TaskClass::Default, task).await
     }
 
+    /// Like `start`, scheduled in the queue of `class`.
+    ///
+    /// # Errors
+    ///
+    /// As for `start`.
     pub async fn start_into<T, F, Fut>(&self, class: TaskClass, task: F) -> Result<T, StartError<E>>
     where
         T: 'static,
@@ -628,6 +737,11 @@ impl<E: 'static> NurseryHandle<E> {
             .map(|(value, _owned)| value)
     }
 
+    /// Like `start`, also returning an [`OwnedTask`] for the started child.
+    ///
+    /// # Errors
+    ///
+    /// As for `start`.
     pub async fn start_owned<T, F, Fut>(&self, task: F) -> Result<(T, OwnedTask<E>), StartError<E>>
     where
         T: 'static,
@@ -637,6 +751,11 @@ impl<E: 'static> NurseryHandle<E> {
         self.start_owned_into(TaskClass::Default, task).await
     }
 
+    /// Like `start_owned`, scheduled in the queue of `class`.
+    ///
+    /// # Errors
+    ///
+    /// As for `start`.
     pub async fn start_owned_into<T, F, Fut>(
         &self,
         class: TaskClass,
@@ -727,6 +846,17 @@ enum BodyOutcome<R> {
     Cancelled,
 }
 
+/// Open a nursery, run `body` with it, then wait for every child. Returns
+/// the body's value once all children finished.
+///
+/// If a child fails or panics, the remaining children and the body are
+/// cancelled (cooperatively) and the nursery fails with the first error.
+/// Children are scheduled in the current queue unless spawned `_into` a class.
+///
+/// # Errors
+///
+/// [`NurseryError`]: a child failed or panicked, or the nursery was
+/// cancelled from outside.
 pub async fn with_nursery<E, R, F>(body: F) -> Result<R, NurseryError<E>>
 where
     E: 'static,
@@ -735,6 +865,12 @@ where
     with_nursery_with_queues(TaskQueues::current(), body).await
 }
 
+/// Like [`with_nursery`], with an explicit set of scheduling queues for the
+/// children's task classes.
+///
+/// # Errors
+///
+/// As for [`with_nursery`].
 pub async fn with_nursery_with_queues<E, R, F>(
     queues: TaskQueues,
     body: F,

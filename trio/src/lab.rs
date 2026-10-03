@@ -67,6 +67,7 @@ pub struct LabConfig {
 }
 
 impl LabConfig {
+    /// A run with this scheduling seed and the default step limit.
     pub fn new(seed: u64) -> Self {
         Self {
             seed,
@@ -87,6 +88,7 @@ impl LabConfig {
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct LabReport<T> {
+    /// The seed the run used, to replay it.
     pub seed: u64,
     /// The root future's output, when it finished.
     pub output: Option<T>,

@@ -58,6 +58,7 @@ pub struct ThreadCancel {
 }
 
 impl ThreadCancel {
+    /// Whether the caller was cancelled; poll it and return early.
     pub fn is_cancelled(&self) -> bool {
         self.flag.load(Ordering::Acquire)
     }

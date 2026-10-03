@@ -22,9 +22,13 @@ use crate::sync::wait_list::{WaitList, WaitSlot};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CancelReason {
+    /// Cancelled by a direct call to [`CancelScope::cancel`].
     Explicit,
+    /// A deadline of the scope or of a scope it inherits from passed.
     Deadline,
+    /// A sibling task in the same nursery failed or panicked.
     NurseryFailure,
+    /// The owner (a nursery, supervisor or service generation) is stopping.
     NurseryClosing,
 }
 
@@ -39,9 +43,12 @@ impl std::fmt::Display for CancelReason {
     }
 }
 
+/// The error of an operation that stopped because its cancel scope was
+/// cancelled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Cancelled {
+    /// Why, when the scope recorded it.
     pub reason: Option<CancelReason>,
 }
 
@@ -62,6 +69,7 @@ impl std::error::Error for Cancelled {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct CancelCause {
+    /// Why the scope was cancelled.
     pub reason: CancelReason,
     /// Who initiated it, when the canceller said so (see
     /// [`CancelScope::cancel_by`]); `None` for plain `cancel`/`cancel_with`.
@@ -220,10 +228,14 @@ impl CancelScope {
         Self::new()
     }
 
+    /// Cancel this scope and every scope that inherits from it, with
+    /// [`CancelReason::Explicit`]. Idempotent: only the first cancellation is
+    /// recorded.
     pub fn cancel(&self) {
         self.cancel_with(CancelReason::Explicit);
     }
 
+    /// Like [`Self::cancel`], recording `reason`.
     pub fn cancel_with(&self, reason: CancelReason) {
         self.cancel_recording(reason, None);
     }
@@ -247,6 +259,7 @@ impl CancelScope {
         self.inner.waiters.wake_all();
     }
 
+    /// Whether this scope, or any scope it inherits from, is cancelled.
     pub fn is_cancelled(&self) -> bool {
         self.inner.effective_cancelled()
     }
@@ -305,6 +318,12 @@ impl CancelScope {
         }
     }
 
+    /// A checkpoint: `Err` once the scope is cancelled.
+    ///
+    /// # Errors
+    ///
+    /// [`Cancelled`], with the reason, when this scope or an ancestor is
+    /// cancelled.
     pub fn check_cancelled(&self) -> Result<(), Cancelled> {
         if self.is_cancelled() {
             Err(Cancelled {
@@ -370,10 +389,14 @@ task_local! {
     static CURRENT_CANCEL_SCOPE: CancelScope;
 }
 
+/// The cancel scope the current task runs under, if any (set by nurseries,
+/// deadline helpers and [`with_cancel_scope`]).
 pub fn current_cancel_scope() -> Option<CancelScope> {
     CURRENT_CANCEL_SCOPE.try_get().ok()
 }
 
+/// Run `future` with `scope` as its current cancel scope: cancellation-aware
+/// operations inside it ([`crate::sleep`], waits, nested scopes) observe it.
 pub async fn with_cancel_scope<F, T>(scope: CancelScope, future: F) -> T
 where
     F: Future<Output = T>,
