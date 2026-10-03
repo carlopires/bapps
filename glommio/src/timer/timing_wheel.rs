@@ -177,7 +177,19 @@ impl TimingWheel {
             // a caller who asked for a hundred microseconds. The slot is
             // small, so take the real minimum from it.
             let slot = (from + offset) % LEVEL_0_SLOTS;
-            return self.earliest_in(&self.slots_1ms[slot]);
+            let level_0 = self.earliest_in(&self.slots_1ms[slot]);
+            // Level 0 is filled relative to now but cascades happen on
+            // aligned boundaries, so a timer still waiting in a higher level
+            // can be due before this one: one 300 ticks out sits in level 1
+            // until tick 256, while one inserted at tick 100 for tick 350 is
+            // already in level 0. The cascade boundary bounds it from below.
+            let cascade = self
+                .next_cascade_tick()
+                .map(|tick| self.tick_to_instant(tick));
+            return match (level_0, cascade) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
         }
 
         // Otherwise the next thing that must happen is a cascade. The
@@ -591,6 +603,28 @@ mod tests {
     // Helper: a waker that does nothing when woken.
     fn dummy_waker() -> Waker {
         Waker::noop().clone()
+    }
+
+    #[test]
+    fn a_level_one_timer_is_not_hidden_by_a_later_level_zero_timer() {
+        let start = Instant::now();
+        let mut wheel = TimingWheel::new_at(start);
+        let ms = |n| start + Duration::from_millis(n);
+        wheel.insert(ms(300), dummy_waker()); // 300 ticks away: level 1
+        wheel.advance_to(ms(100));
+        wheel.insert(ms(350), dummy_waker()); // 250 ticks away: level 0
+        let next = wheel.next_expiry().unwrap();
+        assert!(
+            next <= ms(300),
+            "next expiry {:?} after the 300ms timer",
+            next - start
+        );
+        wheel.advance_to(ms(301));
+        assert_eq!(
+            wheel.drain_expired().count(),
+            1,
+            "the 300ms timer is due at 301ms"
+        );
     }
 
     #[test]
