@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: validate and integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      # rust-toolchain.toml pins the toolchain (with clippy and rustfmt);
+      # `rustup show` installs it.
+      - name: Toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      # io_uring needs locked memory, and raising the limit needs root, as in
+      # core's upstream CI (core/.github/scripts/run-tests.sh).
+      - name: make validate
+        run: sudo -E env "PATH=$PATH" bash -c 'ulimit -Sl 512; ulimit -Hl 512; nproc; make validate'
+
+      - name: make integration
+        run: sudo -E env "PATH=$PATH" bash -c 'ulimit -Sl 512; ulimit -Hl 512; make integration'
