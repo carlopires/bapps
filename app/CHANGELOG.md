@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.7.0 — calls carry the caller's deadline
+
+`ShardClient::call` caps its timeout at the caller's remaining time (the
+scope's effective deadline), and the handler's scope records the request's
+deadline, so `bapps_trio::remaining()` works in handlers and nested calls are
+capped too. A deadline cancellation of a handler is attributed as
+`CancelReason::Deadline`. Test: `tests/deadline_propagation.rs` (lab, 10
+seeds). See the RPC contract's "Deadlines" section.
+
+## 0.6.0 — part of bapps
+
+Renamed from `glommio-app` to `bapps-app` (library `bapps_app`) and moved
+into the bapps workspace. The default node name is `bapps-app`.
+
 ## 0.5.0 — whole nodes in the deterministic lab
 
 Added `lab::run_node(shards, limits, factory)`: `AppBuilder::run` without

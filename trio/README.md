@@ -1,4 +1,4 @@
-# bapps-trio 0.6.0
+# bapps-trio 0.7.0
 
 `bapps-trio` provides Trio-shaped structured concurrency for Glommio's
 Linux `io_uring`, thread-per-core execution model.
@@ -23,9 +23,9 @@ must remain explicit messages/protocols.
 > Educational framework under active development. The semantics are the point;
 > this is not yet a production-hardened runtime.
 
-## Capabilities (0.6.0)
+## Capabilities (0.7.0)
 
-Part of [bapps](../README.md) 0.6.0, on `bapps-core`, the runtime in
+Part of [bapps](../README.md) 0.7.0, on `bapps-core`, the runtime in
 `core/`.
 
 | Capability | API | Tests |
@@ -34,6 +34,9 @@ Part of [bapps](../README.md) 0.6.0, on `bapps-core`, the runtime in
 | Hierarchical, multi-owner cancellation | `CancelScope::{child, any, shielded}` | `tests/semantics.rs` |
 | Cancellation attribution: why a scope was cancelled, by whom | `CancelCause`, `CancelReason`, `cancel_by` | `tests/attribution.rs` |
 | Deadlines on an injectable clock | `fail_after`, `move_on_after`, `TestClock` | `tests/semantics.rs` |
+| Deadlines are part of the scope: relative and absolute helpers; the effective deadline across parents, shields and several owners; time remaining | `fail_at`, `move_on_at`, `CancelScope::{deadline, effective_deadline, set_deadline}`, `current_effective_deadline`, `remaining` | `tests/deadlines.rs` |
+| A cancellable, first-come-first-served token pool | `sync::CapacityLimiter` | `tests/limiter.rs` |
+| Blocking work on helper threads, bounded by a limiter, cancelled cooperatively | `to_thread::{run_sync, run_sync_with, ThreadCancel}` | `tests/to_thread.rs` |
 | Bounded forced stop of owned tasks; an abandoned stop cannot strand accounting | `spawn_owned`, `OwnedTask` | `tests/owned_stop.rs` |
 | Scheduling classes separate from ownership | `TaskClass`, `TaskQueues` | none directly; exercised by applications |
 | Local sync primitives that release waits when dropped | `sync::{Event, Condition}` | `tests/retention.rs` |

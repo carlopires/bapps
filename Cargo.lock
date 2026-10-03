@@ -95,7 +95,7 @@ dependencies = [
 
 [[package]]
 name = "bapps-app"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "async-channel",
  "bapps-core",
@@ -162,7 +162,7 @@ dependencies = [
 
 [[package]]
 name = "bapps-otp"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bapps-core",
  "bapps-trio",
@@ -171,7 +171,7 @@ dependencies = [
 
 [[package]]
 name = "bapps-trio"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bapps-core",
  "futures-lite",

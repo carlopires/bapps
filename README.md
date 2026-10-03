@@ -15,18 +15,18 @@ your application                      domain logic, network protocol, storage
 | Crate | Directory | Version | Capabilities and docs |
 |---|---|---|---|
 | `bapps-core` (lib `glommio`) | `core/glommio` | 0.10.0 line, release `v0.12.0-ng-cp.4` | [README](core/README.md), [CHANGELOG](core/CHANGELOG.md) |
-| `bapps-trio` | `trio/` | 0.6.0 | [README](trio/README.md), [architecture](trio/docs/architecture.md) |
-| `bapps-otp` | `otp/` | 0.6.0 | [README](otp/README.md), [architecture](otp/docs/architecture.md) |
-| `bapps-app` | `app/` | 0.6.0 | [README](app/README.md), [architecture](app/docs/architecture.md), [RPC contract](app/docs/rpc-contract.md) |
+| `bapps-trio` | `trio/` | 0.7.0 | [README](trio/README.md), [architecture](trio/docs/architecture.md) |
+| `bapps-otp` | `otp/` | 0.7.0 | [README](otp/README.md), [architecture](otp/docs/architecture.md) |
+| `bapps-app` | `app/` | 0.7.0 | [README](app/README.md), [architecture](app/docs/architecture.md), [RPC contract](app/docs/rpc-contract.md) |
 
 ## Use
 
 ```toml
 [dependencies]
-bapps-app = { git = "https://github.com/carlopires/bapps", tag = "v0.6.0" }
-bapps-otp = { git = "https://github.com/carlopires/bapps", tag = "v0.6.0" }
-bapps-trio = { git = "https://github.com/carlopires/bapps", tag = "v0.6.0" }
-glommio = { package = "bapps-core", git = "https://github.com/carlopires/bapps", tag = "v0.6.0", default-features = false }
+bapps-app = { git = "https://github.com/carlopires/bapps", tag = "v0.7.0" }
+bapps-otp = { git = "https://github.com/carlopires/bapps", tag = "v0.7.0" }
+bapps-trio = { git = "https://github.com/carlopires/bapps", tag = "v0.7.0" }
+glommio = { package = "bapps-core", git = "https://github.com/carlopires/bapps", tag = "v0.7.0", default-features = false }
 ```
 
 The runtime crate is published as `bapps-core` but its library keeps the name

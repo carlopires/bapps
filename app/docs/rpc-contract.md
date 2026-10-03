@@ -20,6 +20,12 @@ The deadline covers readiness wait, queue admission and response wait. Source an
 
 After caller cancellation/deadline, the source sends Cancel and waits up to `cancellation_grace` for the response. The destination cancels its handler scope, continues polling it for `handler_cancel_grace` so cooperative asynchronous cleanup can finish, then destroys a non-cooperative handler future if necessary.
 
+### Deadlines
+
+A call never outlives its caller: its deadline is `now + min(options.timeout, remaining)`, where `remaining` is the time left before the caller's scope's effective deadline (`bapps_trio::remaining`, set by `fail_after`, `fail_at` and friends, or by an enclosing RPC). The handler's scope records the same deadline, so `remaining()` works inside a handler and calls it makes are capped in turn: a deadline set once at the edge bounds the whole chain of cross-shard hops. A handler cancelled because the deadline passed sees `CancelReason::Deadline`. A call made with no enclosing deadline behaves as before, bounded by `options.timeout`.
+
+Across machines the deadline is not carried automatically: an application's network protocol should send `remaining()` with each request and run the remote handler under `fail_after` of it.
+
 ## Request states
 
 ```text

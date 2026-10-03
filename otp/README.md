@@ -1,4 +1,4 @@
-# bapps-otp 0.6.0
+# bapps-otp 0.7.0
 
 `bapps-otp` is an OTP-shaped service and supervision framework for Glommio,
 built on the sibling `bapps-trio` crate.
@@ -25,9 +25,9 @@ communication remains explicit.
 > Educational framework under active development; not yet a production OTP
 > runtime.
 
-## Capabilities (0.6.0)
+## Capabilities (0.7.0)
 
-Part of [bapps](../README.md) 0.6.0, on `bapps-core`, the runtime in
+Part of [bapps](../README.md) 0.7.0, on `bapps-core`, the runtime in
 `core/`.
 
 | Capability | API | Tests |

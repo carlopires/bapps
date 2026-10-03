@@ -69,6 +69,37 @@ bounded shutdown policy. It keeps the task inside the nursery while exposing:
 This is safer than exposing raw `spawn_local` or detached `Task` handles to
 application code.
 
+## Deadlines
+
+A deadline is part of a cancel scope. `fail_after`/`fail_at` and
+`move_on_after`/`move_on_at` create a child scope, record its deadline (a time
+on the task's clock, so the lab's virtual clock works too) and cancel it with
+`CancelReason::Deadline` when it passes. `CancelScope::effective_deadline` is
+the earliest deadline in the scope's lineage: a nested looser deadline cannot
+extend an outer one, a shielded scope is a new root and does not see outer
+deadlines, and a scope with several owners (`CancelScope::any`) takes the
+earliest of theirs. `current_effective_deadline()` and `remaining()` answer
+"how long do I have?" for the current task, which is what a call should pass
+on: bapps-app's cross-shard calls do this automatically.
+`CancelScope::set_deadline` records a deadline without enforcing it, for a
+layer that enforces it itself (bapps-app records an incoming request's
+deadline on its handler's scope).
+
+## Blocking work
+
+`to_thread::run_sync` runs a blocking closure on the executor's blocking
+thread pool (Glommio's `spawn_blocking`) and awaits it without blocking the
+executor. A `sync::CapacityLimiter` bounds how many jobs run at once; jobs
+beyond it wait in the limiter's first-come-first-served queue, where waiting
+is cancellable and a waiter that gives up leaves the queue. Cancellation is
+cooperative: before the job starts it never runs; once it runs, it is told
+through a `Send` `ThreadCancel` and the caller still waits for its result,
+so no side effect is lost. There is no way to abandon a running job, because
+an abandoned thread would run with no owner. The executor's pool has one
+thread unless configured otherwise, and Glommio also uses it for some
+file-system calls, so the default limiter has one token; keep a limiter no
+larger than the pool, so waiting happens where it can be cancelled.
+
 ## Foreign futures
 
 A future from Glommio or another crate is not magically scope-aware. The rule is:

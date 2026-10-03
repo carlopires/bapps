@@ -1,4 +1,4 @@
-# bapps-app 0.6.0
+# bapps-app 0.7.0
 
 An **opinionated native-Rust application framework** for shard-per-core services: services own state, nurseries own concurrent work, pinned CPU shards own execution, and bounded cross-shard RPC connects them. It sits above `bapps_otp` and `bapps_trio` and is an educational systems framework, not an OTP, BEAM or Seastar compatibility implementation.
 
@@ -15,9 +15,9 @@ Between machines: application-owned network protocol (not this crate)
 
 A shard ID is its index in the configured CPU list, not the CPU number. `--cpus 4,7` means shard 0 on CPU 4, shard 1 on CPU 7. Automatic selection respects `/proc/thread-self/status` affinity and selects the lowest allowed IDs. It does **not** detect physical/P-cores, optimize NUMA or reserve a host core.
 
-## Capabilities (0.6.0)
+## Capabilities (0.7.0)
 
-Part of [bapps](../README.md) 0.6.0, on `bapps-core`, the runtime in
+Part of [bapps](../README.md) 0.7.0, on `bapps-core`, the runtime in
 `core/`.
 
 | Capability | API | Tests / docs |
@@ -27,6 +27,7 @@ Part of [bapps](../README.md) 0.6.0, on `bapps-core`, the runtime in
 | Outcome classes: not admitted (never ran) vs outcome unknown (may have run) | `CallError::{NotAdmitted, OutcomeUnknown, ..}` | `src/rpc/protocol_tests.rs`; [RPC contract](docs/rpc-contract.md) |
 | RPC deadlines on an injectable clock (crate-private seam; the lab uses virtual time through it) | `RpcClock` (internal) | `src/rpc/clocked_tests.rs` |
 | One value for every transport bound | `RpcLimits`, `AppBuilder::limits` | [architecture: limits](docs/architecture.md#limits) |
+| A call carries the caller's deadline: its timeout is capped at the caller's remaining time, and the handler sees the same deadline | `ShardClient::call`, `bapps_trio::remaining` | `tests/deadline_propagation.rs`; [RPC contract](docs/rpc-contract.md#deadlines) |
 | Whole node in the deterministic lab | `lab::run_node` | `tests/lab.rs`; [architecture](docs/architecture.md#deterministic-node) |
 
 ## First experiment

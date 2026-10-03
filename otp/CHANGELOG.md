@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.0
+
+Dependency-only: `bapps-trio` 0.7.0.
+
+## 0.6.0 — part of bapps
+
+Renamed from `glommio-otp` to `bapps-otp` (library `bapps_otp`) and moved
+into the bapps workspace. No API change.
+
 ## 0.5.1
 
 Dependency-only: `bapps-trio` 0.5.1.

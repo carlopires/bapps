@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.7.0 — deadlines in scopes, capacity limiter, blocking work
+
+- Deadlines are part of a cancel scope: `fail_after`, `move_on_after` and the
+  new absolute `fail_at`, `move_on_at` record their deadline on the scope
+  they create. `CancelScope::effective_deadline` is the earliest deadline in
+  the scope's lineage (shields stop it; several owners take the earliest);
+  `current_effective_deadline()` and `remaining()` expose it to code.
+  `CancelScope::set_deadline` records a deadline its caller enforces.
+- `sync::CapacityLimiter`: a cancellable, first-come-first-served token pool;
+  a waiter that gives up leaves the queue.
+- `to_thread::{run_sync, run_sync_with, ThreadCancel}`: blocking work on the
+  executor's blocking thread pool, bounded by a limiter (default one token,
+  matching the default pool), cancelled cooperatively; no abandoning.
+- Tests: `tests/deadlines.rs`, `tests/limiter.rs` (lab), `tests/to_thread.rs`
+  (real executor). Each checked by breaking the code it protects.
+
+## 0.6.0 — part of bapps
+
+Renamed from `glommio-trio` to `bapps-trio` (library `bapps_trio`) and moved
+into the bapps workspace, on `bapps-core`. No API change.
+
 ## 0.5.1
 
 Added `Lab::is_running()`, so layers above can require a lab.
