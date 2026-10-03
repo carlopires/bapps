@@ -478,6 +478,16 @@ where
             abort_on_panic(|| {
                 // Drop the schedule function.
                 (raw.schedule as *mut S).drop_in_place();
+
+                // Drop the header as well, as async-task does and community
+                // glommio restored (e657058, #448, where the header owned the
+                // sleep notifier and leaked it). Here the header owns no
+                // notifier; its only field with a destructor is `awaiter`,
+                // which completion, cancellation and close all take out
+                // through `notify`, so this is normally dropping `None`. It is
+                // kept so that any path that leaves a waker behind releases it
+                // instead of leaking a reference to the awaiting task.
+                (raw.header as *mut Header).drop_in_place();
             });
 
             // Finally, deallocate the memory reserved by the task.

@@ -4730,3 +4730,49 @@ mod spawn_blocking_send_test {
         });
     }
 }
+
+#[cfg(test)]
+mod awaiter_release {
+    use super::*;
+    use std::{
+        sync::Arc,
+        task::{Context, Wake, Waker},
+    };
+
+    struct Counted;
+    impl Wake for Counted {
+        fn wake(self: Arc<Self>) {}
+    }
+
+    /// A detached handle polled with a waker, then dropped before its task
+    /// finishes, must not leave that waker behind when the task is destroyed.
+    /// (Completion takes the awaiter out through `notify`; this guards that
+    /// path. The header drop in `RawTask::destroy` is the backstop.)
+    #[test]
+    fn a_destroyed_task_releases_its_awaiter() {
+        LocalExecutor::default().run(async {
+            let probe = Arc::new(Counted);
+            let waker = Waker::from(probe.clone());
+            // A detached handle: dropping it does not cancel the task, so the
+            // task runs to completion with the handle's waker still registered.
+            let mut handle = Box::pin(
+                crate::spawn_local(async {
+                    crate::timer::sleep(Duration::from_millis(5)).await;
+                })
+                .detach(),
+            );
+            let mut cx = Context::from_waker(&waker);
+            assert!(handle.as_mut().poll(&mut cx).is_pending());
+            drop(waker);
+            assert_eq!(Arc::strong_count(&probe), 2, "the handle registered it");
+            drop(handle);
+            // Let the task finish and be destroyed.
+            crate::timer::sleep(Duration::from_millis(20)).await;
+            assert_eq!(
+                Arc::strong_count(&probe),
+                1,
+                "the destroyed task kept the awaiter"
+            );
+        });
+    }
+}
