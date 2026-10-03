@@ -25,9 +25,6 @@ struct IntWriter {
     count: Cell<usize>,
     next_print: Cell<Duration>,
     count_at_last_print: Cell<usize>,
-
-    last_tq_runtime: Cell<Duration>,
-    last_ex_runtime: Cell<Duration>,
 }
 
 impl IntWriter {
@@ -39,8 +36,6 @@ impl IntWriter {
             count: Cell::new(0),
             next_print: Cell::new(Duration::from_secs(1)),
             count_at_last_print: Cell::new(0),
-            last_tq_runtime: Cell::new(Duration::from_nanos(0)),
-            last_ex_runtime: Cell::new(Duration::from_nanos(0)),
         })
     }
 
@@ -55,12 +50,11 @@ impl IntWriter {
             }
             self.count.set(me + 1);
             if elapsed > self.next_print.get() {
+                // Stats reset on read, so these cover the time since the
+                // previous print.
                 let tq_stats = glommio::executor().task_queue_stats(my_handle).unwrap();
-
-                let tq_runtime = tq_stats.runtime();
-                let tq_delta = tq_runtime - self.last_tq_runtime.get();
-                let ex_runtime = glommio::executor().executor_stats().total_runtime();
-                let ex_delta = ex_runtime - self.last_ex_runtime.get();
+                let tq_delta = tq_stats.runtime();
+                let ex_delta = glommio::executor().executor_stats().total_runtime();
 
                 let ratio = self.count.get() as f64 / self.count_target as f64 * 100.0;
                 let intratio = self.count.get() - self.count_at_last_print.get();
@@ -79,8 +73,6 @@ impl IntWriter {
                 self.next_print
                     .set(self.next_print.get() + Duration::from_secs(1));
                 self.count_at_last_print.set(self.count.get());
-                self.last_tq_runtime.set(tq_runtime);
-                self.last_ex_runtime.set(ex_runtime);
             }
 
             burn_cpu(Duration::from_micros(500));

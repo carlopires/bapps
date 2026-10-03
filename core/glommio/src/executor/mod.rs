@@ -2508,6 +2508,11 @@ impl ExecutorProxy {
     /// or a [`GlommioError`] of type `[QueueErrorKind`] if there is no task
     /// queue with this handle
     ///
+    /// Reading resets: the returned stats cover the time since the previous
+    /// read of this queue's stats (by this method or
+    /// [`all_task_queue_stats`](Self::all_task_queue_stats)). Callers that want
+    /// running totals must add the readings up themselves.
+    ///
     /// # Examples
     /// ```
     /// use glommio::{Latency, LocalExecutorBuilder, Shares};
@@ -2558,6 +2563,9 @@ impl ExecutorProxy {
     /// The collection can be anything that implements [`Extend`] and it is
     /// initially passed by the user, so they can control how allocations are
     /// done.
+    ///
+    /// Reading resets every queue's stats, as in
+    /// [`task_queue_stats`](Self::task_queue_stats).
     ///
     /// # Examples
     /// ```
@@ -2616,6 +2624,16 @@ impl ExecutorProxy {
     }
 
     /// Returns a [`ExecutorStats`] struct with information about this Executor
+    ///
+    /// Reading resets: the returned stats cover the time since the previous
+    /// call. Callers that want running totals must add the readings up
+    /// themselves.
+    ///
+    /// [`ExecutorStats::total_runtime`] grows only when the executor finishes a
+    /// pass over its task queues, so a task that reads it right after
+    /// [`yield_task_queue_now`](Self::yield_task_queue_now) may not see its own
+    /// busy time yet; a short sleep, which leaves nothing runnable, guarantees
+    /// the pass has ended.
     ///
     /// # Examples:
     ///
@@ -3562,63 +3580,47 @@ mod test {
 
     #[test]
     fn test_runtime_stats() {
-        let dur = Duration::from_secs(2);
-        let ex0 = LocalExecutorBuilder::default().make().unwrap();
-        ex0.run(async {
+        // `executor_stats()` resets on read: each call returns what was
+        // accumulated since the previous call. `total_runtime` only grows when
+        // the run loop finishes a pass over the task queues. A sleep leaves
+        // nothing runnable, so the pass must end and the busy time is counted
+        // before the task resumes; `yield_task_queue_now` can be re-run in the
+        // same pass when the preempt timer has not fired yet.
+        async fn check(label: &str) {
+            let runtime = || crate::executor().executor_stats().total_runtime();
+            let start = runtime();
             assert!(
-                crate::executor().executor_stats().total_runtime() < Duration::from_nanos(10),
-                "expected runtime on LE {:#?} is less than 10 ns",
-                crate::executor().executor_stats().total_runtime()
+                start < Duration::from_nanos(10),
+                "{label}: started at {start:?}"
             );
 
             let now = Instant::now();
-            while now.elapsed().as_millis() < 200 {}
-            crate::executor().yield_task_queue_now().await;
+            while now.elapsed() < Duration::from_millis(200) {}
+            timer::sleep(Duration::from_millis(1)).await;
+            let busy = runtime();
             assert!(
-                crate::executor().executor_stats().total_runtime() >= Duration::from_millis(200),
-                "expected runtime on LE0 {:#?} is greater than 200 ms",
-                crate::executor().executor_stats().total_runtime()
+                busy >= Duration::from_millis(200),
+                "{label}: busy {busy:?} < 200ms"
             );
 
-            timer::sleep(dur).await;
+            // Parked or spinning, a 2 s sleep must not count as runtime.
+            timer::sleep(Duration::from_secs(2)).await;
+            let idle = runtime();
             assert!(
-                crate::executor().executor_stats().total_runtime() < Duration::from_millis(400),
-                "expected runtime on LE0 {:#?} is not greater than 400 ms",
-                crate::executor().executor_stats().total_runtime()
+                idle < Duration::from_millis(200),
+                "{label}: sleep counted {idle:?}"
             );
-        });
+        }
+
+        let ex0 = LocalExecutorBuilder::default().make().unwrap();
+        ex0.run(check("parking executor"));
 
         let ex = LocalExecutorBuilder::new(Placement::Fixed(0))
             // ensure entire sleep should spin
             .spin_before_park(Duration::from_secs(5))
             .make()
             .unwrap();
-        ex.run(async {
-            crate::spawn_local(async move {
-                assert!(
-                    crate::executor().executor_stats().total_runtime() < Duration::from_nanos(10),
-                    "expected runtime on LE {:#?} is less than 10 ns",
-                    crate::executor().executor_stats().total_runtime()
-                );
-
-                let now = Instant::now();
-                while now.elapsed().as_millis() < 200 {}
-                crate::executor().yield_task_queue_now().await;
-                assert!(
-                    crate::executor().executor_stats().total_runtime()
-                        >= Duration::from_millis(200),
-                    "expected runtime on LE {:#?} is greater than 200 ms",
-                    crate::executor().executor_stats().total_runtime()
-                );
-                timer::sleep(dur).await;
-                assert!(
-                    crate::executor().executor_stats().total_runtime() < Duration::from_millis(400),
-                    "expected runtime on LE {:#?} is not greater than 400 ms",
-                    crate::executor().executor_stats().total_runtime()
-                );
-            })
-            .await;
-        });
+        ex.run(async { crate::spawn_local(check("spinning executor")).await });
     }
 
     // Spin for 2ms and then yield. How many shares we have should control how many

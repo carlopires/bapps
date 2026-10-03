@@ -21,6 +21,31 @@ glommio = { package = "glommio-ng", version = "0.12" }
 in automatically by the default `macros` feature. You do not depend on it
 directly.
 
+## Unreleased (bapps 0.8.0)
+
+- `executor_stats`, `task_queue_stats` and `all_task_queue_stats` now
+  document that reading resets: each call returns what accumulated since the
+  previous read. This was always the behaviour (the stats are `mem::take`n) but
+  was undocumented. The `deadline_writer` example treated the readings as
+  running totals and subtracted the previous one, which reported the wrong CPU
+  share and could underflow; it now uses each reading directly.
+- `executor_stats` also documents that `total_runtime` only grows when the
+  executor finishes a pass over its task queues.
+
+Tests only:
+
+- `test_runtime_stats` read its busy time right after `yield_task_queue_now`,
+  which only ends the pass if the 100 ms preempt timer has already fired; when
+  it had not, the task resumed in the same pass and read a stale value. It now
+  sleeps 1 ms, which leaves nothing runnable and always ends the pass, and its
+  failure messages print the value that was checked (they used to read the
+  stats again, after the reset). It still fails if the run loop stops counting
+  busy time (0 ns) or counts spin/park time (1.8 s of a 2 s sleep).
+- The three remaining foreign-sender `shared_channel` tests wait for the
+  consumer to connect before the sender's executor exits.
+- `deadline_queue_behaves_well_if_we_process_too_much` waits up to 500 ms for
+  the controller to converge instead of sleeping 2 ms.
+
 ## bapps core (bapps 0.6.0)
 
 This runtime is now maintained in [bapps](https://github.com/carlopires/bapps)
