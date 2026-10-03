@@ -27,6 +27,7 @@ pub mod sync;
 pub mod task_class;
 pub mod testing;
 pub mod time;
+pub mod to_thread;
 
 pub use cancel::{
     CancelCause, CancelReason, CancelScope, Cancelled, current_cancel_scope, with_cancel_scope,
