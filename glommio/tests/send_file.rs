@@ -33,7 +33,10 @@ fn tmp_path(name: &str) -> std::path::PathBuf {
 /// is what this test needs in order to tell "refused before submission"
 /// apart from "the kernel rejected it".
 fn dma_tmp_path(name: &str) -> std::path::PathBuf {
-    let mut p: std::path::PathBuf = concat!(env!("CARGO_MANIFEST_DIR"), "/../target").into();
+    // Cargo's per-target scratch directory for integration tests: it exists
+    // wherever the target directory is, unlike `<manifest>/../target`, which
+    // assumed the crate sits one level below its workspace root.
+    let mut p: std::path::PathBuf = env!("CARGO_TARGET_TMPDIR").into();
     p.push(format!("glommio-send-file-{}-{}", std::process::id(), name));
     p
 }

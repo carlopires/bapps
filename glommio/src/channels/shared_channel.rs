@@ -1252,9 +1252,14 @@ mod foreign_tests {
     fn a_parked_executor_is_woken_by_a_foreign_send() {
         let (sender, receiver) = new_bounded(4);
 
+        // The consumer must be connected before the sender's executor exits,
+        // or it can observe its peer already gone and close the channel (the
+        // same race as in `shared_drop_cascade_drop_executor_reverse`).
+        let (connected_tx, connected_rx) = std::sync::mpsc::channel();
         let consumer = LocalExecutorBuilder::new(Placement::Unbound)
             .spawn(move || async move {
                 let mut receiver = receiver.connect().await;
+                connected_tx.send(()).unwrap();
                 let value = receiver.next().await;
                 (value, std::time::Instant::now())
             })
@@ -1265,6 +1270,7 @@ mod foreign_tests {
             .spawn(move || async move {
                 let sender = sender.connect().await;
                 handoff.send(sender.into_foreign()).unwrap();
+                connected_rx.recv().unwrap();
             })
             .unwrap()
             .join()
