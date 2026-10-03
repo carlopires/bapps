@@ -45,3 +45,9 @@ pub use types::{
 };
 
 pub use bapps_trio::{CancelScope, StopOutcome, TaskClass, TaskQueues, TaskStatus};
+
+/// The README example is compiled and run as a doctest, so it cannot drift
+/// from the API.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

@@ -22,3 +22,9 @@ pub use rpc::{
 pub use runtime::{
     AppBuilder, AppError, NodeControl, ReadyGate, ShardContext, ShardId, ShardResult,
 };
+
+/// The README example is compiled and run as a doctest, so it cannot drift
+/// from the API.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

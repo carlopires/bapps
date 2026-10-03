@@ -80,4 +80,4 @@ poor synchronization primitive and tends to hide races.
 
 ## Multicore companion
 
-This document describes shard-local semantics. See [the multicore boundary](multicore.md) and [0.2.1 migration](migration-0.2.1.md) for the new application layer and release-specific additions. The current validation gate is in [VALIDATION](../VALIDATION.md).
+This document describes shard-local semantics. See [the multicore boundary](multicore.md) and [0.2.1 migration](history/migration-0.2.1.md) for the new application layer and release-specific additions. Validation: `make validate` and `make integration` at the workspace root.

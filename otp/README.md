@@ -1,34 +1,105 @@
-# bapps-otp 0.7.0
+# bapps-otp
 
-`bapps-otp` is an OTP-shaped service and supervision framework for Glommio,
-built on the sibling `bapps-trio` crate.
-
-The goal is not to reproduce BEAM. The goal is to encode the production
-architecture decisions that make OTP compelling while preserving Rust's
-ownership model and Glommio's Seastar-style execution model.
+OTP-shaped supervision and service lifecycle for one shard of a
+thread-per-core [bapps](../README.md) application, built on
+[bapps-trio](../trio/README.md). It keeps what makes OTP worth having
+(supervision trees, restart policies, services that own their state behind a
+mailbox) without a BEAM: services are Rust values owned by one executor.
 
 ```text
-application                  domain semantics
-    ↓
-bapps-otp                  failure topology / services / mailboxes
-    ↓
-bapps-trio                 transient lifetime / cancellation / deadlines
-    ↓
-Glommio                      shard-per-core scheduling + io_uring
-    ↓
-Rust                         memory/resource ownership
+your application            domain logic
+        ↓
+bapps-otp                   failure topology, services, mailboxes, registry
+        ↓
+bapps-trio                  transient tasks, cancellation, deadlines
+        ↓
+bapps-core (Glommio)        one executor per core, io_uring
 ```
 
-The framework is intentionally **shard-local**. Cross-core and cross-node
-communication remains explicit.
+Everything here is shard-local; across cores use
+[bapps-app](../app/README.md), across machines your own protocol.
 
-> Educational framework under active development; not yet a production OTP
-> runtime.
+**Status:** pre-1.0. The API may still change before 1.0.0; every change is in
+the [CHANGELOG](CHANGELOG.md).
 
-## Capabilities (0.7.0)
+## Example
 
-Part of [bapps](../README.md) 0.7.0, on `bapps-core`, the runtime in
-`core/`.
+A counter service owns its state behind a bounded mailbox and advertises a
+handle for its current generation; a client started after it looks the
+handle up and sends to it.
+
+```rust
+use std::error::Error;
+use bapps_otp::{
+    Application, CancelScope, ChildSpec, LocalSender, ServiceKey, Strategy, SupervisorSpec,
+    TaskQueues,
+};
+
+#[derive(Clone)]
+struct Counter(LocalSender<u64>);
+static COUNTER: ServiceKey<Counter> = ServiceKey::new("counter");
+
+glommio::LocalExecutor::default().run(async {
+    let shutdown = CancelScope::new();
+    let stop = shutdown.clone();
+    let counter = ChildSpec::worker("counter", move |ctx, started| {
+        let stop = stop.clone();
+        async move {
+            let (adds, inbox) = ctx.mailbox::<u64>("adds", 64);
+            ctx.register(COUNTER, Counter(adds))?;
+            started.started(())?;
+            let mut total = 0;
+            // Ends when the supervisor stops this generation.
+            while let Ok(n) = inbox.recv_in(&ctx.scope()).await {
+                total += n;
+                if total == 6 {
+                    stop.cancel(); // done: stop the application
+                }
+            }
+            Ok::<(), Box<dyn Error>>(())
+        }
+    });
+    let client = ChildSpec::worker("client", |ctx, started| async move {
+        let counter = ctx.service(COUNTER).ok_or("counter is not registered")?;
+        started.started(())?;
+        for n in 1..=3 {
+            counter.0.send(n).await?;
+        }
+        ctx.scope().cancelled().await;
+        Ok::<(), Box<dyn Error>>(())
+    });
+    // Children start in order; RestForOne restarts the client too if the
+    // counter fails, because it depends on it.
+    let root = SupervisorSpec::new("root", Strategy::RestForOne)
+        .child(counter)
+        .child(client);
+    Application::new("example", root)
+        .run(shutdown, TaskQueues::current())
+        .await
+        .expect("a clean stop");
+});
+```
+
+## Supervision
+
+- Sequential start with readiness (`TaskStatus::started`), reverse-order stop.
+- Strategies `OneForOne`, `OneForAll`, `RestForOne`; restart policies
+  `Permanent`, `Transient`, `Temporary`; restart intensity per supervisor.
+- A panic is an exit reason (`ExitReason::Panic`), not a crash of the shard.
+- Nested supervisors; a typed shard-local registry whose per-generation
+  entries disappear with their generation; a runtime tree to inspect it all.
+- Bounded stops: cooperative cancellation, then a forced abort after the
+  child's grace period (`Shutdown`).
+
+## Long-lived versus transient
+
+Do not supervise every request. Long-lived services (storage, routing, a TCP
+listener, maintenance) are supervised children; transient work (one
+connection, one outbound call, one scan) runs in their generation's
+`ServiceTasks` or a nursery. A request failure must not restart a service; a
+service failure must not leave its transient work running.
+
+## Capabilities
 
 | Capability | API | Tests |
 |---|---|---|
@@ -41,229 +112,24 @@ Part of [bapps](../README.md) 0.7.0, on `bapps-core`, the runtime in
 | Introspection of the live tree | `RuntimeTree`, `Application::tree` | `tests/supervision.rs` |
 | Runs under the trio deterministic lab (virtual time, seeded interleavings) | `bapps_trio::testing::Lab` | `tests/lab.rs` |
 
-Older release notes below are kept for history.
+## Not in this crate
 
-## Multicore companion release (0.2.1)
-
-Use this matched release with `bapps_app` 0.1.0. This crate remains local to one executor; the new app crate owns CPU placement, node readiness and cross-shard messages. It does not turn local cancel scopes, registries or handles into thread-safe global state.
-
-See [0.2.1 migration](docs/migration-0.2.1.md), [multicore boundary](docs/multicore.md). Earlier 0.2 feature documentation below is retained. Historical validation output is not validation of this modified release.
-
-## What 0.2 adds
-
-The first application built on it proved several patterns twice (storage and peer services). 0.2 extracts
-those patterns into the framework.
-
-### `LocalMailbox<T>`
-
-A bounded, shard-local, cancellation-aware mailbox:
-
-```rust
-let (tx, rx) = ctx.mailbox::<Command>("commands", 256);
-```
-
-Properties:
-
-- bounded capacity and backpressure;
-- cloneable sender, single-owner receiver;
-- cancellation-aware `send`/`recv`;
-- explicit `send_in`/`recv_in` for a chosen scope;
-- clean close semantics;
-- live depth/capacity/sender count in the runtime tree.
-
-Application command enums remain application-specific. The framework supplies
-the mailbox, not a giant generic `GenServer` trait.
-
-### Service-owned Trio tasks
-
-Every service generation gets a `ServiceTasks` group:
-
-```rust
-ctx.tasks().spawn_into(TaskClass::Replication, |scope| async move {
-    replicate(scope).await
-})?;
-```
-
-These tasks are still Trio children, but they also belong to the current
-service generation. When the service ends/restarts, its transient work cannot
-survive it.
-
-Unexpected `Err`/panic in a service-owned task participates in the service
-failure boundary rather than becoming an unrelated detached failure.
-
-### Framework-owned service generations
-
-`ChildContext::generation()` returns a liveness token for the exact supervised
-generation:
-
-```rust
-#[derive(Clone)]
-struct StorageHandle {
-    tx: LocalSender<StorageCommand>,
-    generation: ServiceGeneration,
-}
-
-impl StorageHandle {
-    async fn get(&self, key: String) -> Result<Option<String>> {
-        self.generation.ensure_alive()?;
-        // send command...
-        # Ok(None)
-    }
-}
-```
-
-The supervisor marks the token stopped on **normal exit, failure, panic, and
-force-abort**. Applications no longer need a load-bearing `ServiceLifetime`
-`Drop` guard to publish death.
-
-Registry entries owned by the generation are removed by the same framework
-exit path.
-
-### Bounded shutdown policy
-
-`bapps-trio` 0.2 provides `OwnedTask`. OTP consumes it as policy:
-
-```text
-cancel service
-     ↓
-wait child-specific grace period
-     ↓
-returned?
-  ├─ yes → Shutdown
-  └─ no  → force-abort exact owned task → Killed
-```
-
-Per-child policy:
-
-```rust
-ChildSpec::worker("storage", run_storage)
-    .shutdown_after(Duration::from_secs(10));
-```
-
-or, rarely:
-
-```rust
-.shutdown(Shutdown::BrutalKill)
-```
-
-This closes the major v0.1 shutdown gap without exposing raw Glommio task
-handles to application code.
-
-### Richer runtime tree
-
-Child snapshots now include:
-
-- status / generation / restart count / last exit;
-- restart and shutdown policy;
-- `TaskClass`;
-- active service-owned task count;
-- live mailbox depth/capacity/closed state/sender count;
-- bounded recent exit history.
-
-Supervisor snapshots include active child count and recent exit history.
-
-This is intended to power application admin surfaces without each application
-inventing lifecycle instrumentation.
-
-## Supervision retained from 0.1
-
-- sequential startup with `TaskStatus` readiness;
-- reverse-order shutdown;
-- `OneForOne`, `OneForAll`, `RestForOne`;
-- `Permanent`, `Transient`, `Temporary`;
-- supervisor restart intensity;
-- ordinary Rust panic → `ExitReason::Panic`;
-- nested supervisors;
-- typed shard-local registry;
-- automatic generation-owned registry cleanup;
-- explicit runtime supervision tree;
-- task classes preserved per child.
-
-## The long-lived/transient boundary
-
-Do not supervise every request.
-
-```text
-LONG-LIVED                       TRANSIENT
-
-StorageService                  TCP connection
-RouterService                   outbound RPC
-PeerService                     distributed scan
-TcpApiService                   replica read
-MaintenanceService              repair fan-out
-
-     ↓                               ↓
-bapps-otp                    bapps-trio
-Supervisor                     Nursery
-Restart policy                 CancelScope
-LocalMailbox                   deadlines / race
-ServiceGeneration              multi-owner cancellation
-```
-
-A request failure normally must not restart a service. A service failure must
-not leave its transient operations alive.
-
-## Recommended service shape
-
-```rust
-let storage = ChildSpec::worker("storage", |ctx, started| async move {
-    let generation = ctx.generation();
-    let (tx, rx) = ctx.mailbox::<StorageCommand>("commands", 256);
-
-    ctx.register(
-        STORAGE,
-        StorageHandle { tx, generation },
-    )?;
-
-    let mut state = recover_storage().await?;
-    started.started(())?;
-
-    loop {
-        let command = rx.recv().await?;
-        state.handle(command)?;
-    }
-});
-```
-
-The domain still defines `StorageCommand` and state-transition rules. The
-framework standardizes lifetime, backpressure, readiness, supervision,
-observability, and transient task ownership.
-
-## Workspace layout
-
-This crate lives in the bapps workspace as `otp/`, next to `core/`, `trio/`
-and `app/`; the workspace builds and validates them together.
+No distributed actors or remote PIDs, no cross-shard cancel scopes, no
+cross-node supervision, no arbitrary links, no hot code upgrade, no universal
+`GenServer` trait, no persistence or consensus. These either blur the
+boundaries above or are not yet justified by an application.
 
 ## Run
 
-```bash
-make validate
-cargo run --example restart
-cargo run --example registry
-cargo run --example service
+```sh
+make validate                                   # from the workspace root
+cargo run -p bapps-otp --example service        # also: restart, registry
 ```
-
-## What remains deliberately explicit
-
-0.2 still does **not** implement:
-
-- distributed actors / transparent remote PIDs;
-- cross-shard `CancelScope`;
-- cross-node supervision;
-- arbitrary OTP links;
-- hot code upgrades;
-- a universal `GenServer` trait;
-- persistence/consensus semantics;
-- work stealing or a global executor.
-
-Those would either blur architectural boundaries or are not yet justified by
-validated application patterns.
 
 ## Documents
 
-- [`docs/developer-guide.md`](docs/developer-guide.md) — programming rules and pre-commit checks
-- [`CHANGELOG.md`](CHANGELOG.md) — version changes
-- [`docs/architecture.md`](docs/architecture.md) — framework layers/invariants
-- [`docs/service-pattern.md`](docs/service-pattern.md) — how to write a service
-- [`docs/migration-0.2.md`](docs/migration-0.2.md) — changes from 0.1
-- Validation: `make validate` and `make integration` at the workspace root
+- [Architecture](docs/architecture.md): supervision, generations, mailboxes.
+- [Service pattern](docs/service-pattern.md): how to write a service.
+- [Developer guide](docs/developer-guide.md); [multicore boundary](docs/multicore.md).
+- [CHANGELOG](CHANGELOG.md); older notes and migration guides in
+  [docs/history](docs/history).

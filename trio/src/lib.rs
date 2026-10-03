@@ -50,3 +50,9 @@ pub use time::{
 /// Boxed, executor-local future used where a callback must borrow from a
 /// nursery for the lifetime of the callback.
 pub type LocalBoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + 'a>>;
+
+/// The README example is compiled and run as a doctest, so it cannot drift
+/// from the API.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

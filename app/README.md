@@ -1,24 +1,82 @@
-# bapps-app 0.7.0
+# bapps-app
 
-An **opinionated native-Rust application framework** for shard-per-core services: services own state, nurseries own concurrent work, pinned CPU shards own execution, and bounded cross-shard RPC connects them. It sits above `bapps_otp` and `bapps_trio` and is an educational systems framework, not an OTP, BEAM or Seastar compatibility implementation.
+Pinned shard-per-core applications on [bapps](../README.md): one executor per
+CPU, each running its own [bapps-otp](../otp/README.md) application, joined by
+bounded cross-shard calls with explicit cancellation and deadlines. Services
+own state, nurseries own concurrent work, shards own execution.
 
 ```text
-Host thread: start pinned executors -> readiness barrier -> stop/join
+host thread: start pinned executors -> readiness barrier -> stop/join
   |
-  +-- CPU A / shard 0: Application -> OTP services -> Trio tasks -> local state
-  +-- CPU B / shard 1: Application -> OTP services -> Trio tasks -> local state
-  +-- CPU C / shard 2: Application -> OTP services -> Trio tasks -> local state
+  +-- CPU A / shard 0: Application -> services -> tasks -> local state
+  +-- CPU B / shard 1: Application -> services -> tasks -> local state
 
-Between shards: bounded explicit Send request/reply and cancellation messages
-Between machines: application-owned network protocol (not this crate)
+between shards:   bounded, typed Send request/reply + cancellation
+between machines: your application's protocol (not this crate)
 ```
 
-A shard ID is its index in the configured CPU list, not the CPU number. `--cpus 4,7` means shard 0 on CPU 4, shard 1 on CPU 7. Automatic selection respects `/proc/thread-self/status` affinity and selects the lowest allowed IDs. It does **not** detect physical/P-cores, optimize NUMA or reserve a host core.
+A shard ID is its index in the configured CPU list, not the CPU number:
+`.cpus(vec![4, 7])` puts shard 0 on CPU 4 and shard 1 on CPU 7. Automatic
+selection takes the lowest CPUs the calling thread may use; it does not pick
+physical cores or optimize NUMA.
 
-## Capabilities (0.7.0)
+**Status:** pre-1.0. The API may still change before 1.0.0; every change is in
+the [CHANGELOG](CHANGELOG.md).
 
-Part of [bapps](../README.md) 0.7.0, on `bapps-core`, the runtime in
-`core/`.
+## Example
+
+Every shard runs the same factory, on its own executor: here, a counter
+endpoint, and on shard 0 a driver that calls every shard and stops the node.
+
+```rust
+use std::{cell::Cell, error::Error, rc::Rc};
+use bapps_app::{AppBuilder, CallOptions, ShardId};
+use bapps_otp::{Application, ChildSpec, Strategy, SupervisorSpec};
+
+AppBuilder::new()
+    .shards(1) // or .shards(n), .cpus(vec![...]): every shard runs this factory
+    .run::<u64, u64, _, _>(|shard| {
+        // Runs on the shard's own executor: Rc and !Send state are fine here.
+        let (id, inbox, client) = (shard.shard_id(), shard.inbox(), shard.client());
+        let (gate, node) = (shard.ready_gate(), shard.node_control());
+        async move {
+            let endpoint = ChildSpec::worker("counter", move |ctx, started| {
+                let counter = Rc::new(Cell::new(0_u64));
+                bapps_app::serve(ctx, started, inbox.clone(), move |amount, _scope| {
+                    let counter = counter.clone();
+                    async move {
+                        counter.set(counter.get() + amount);
+                        Ok(counter.get())
+                    }
+                })
+            });
+            let mut root = SupervisorSpec::new("root", Strategy::OneForOne).child(endpoint);
+            if id == ShardId(0) {
+                root = root.child(ChildSpec::worker("driver", move |ctx, started| {
+                    let (client, gate, node) = (client.clone(), gate.clone(), node.clone());
+                    async move {
+                        started.started(())?;
+                        let scope = ctx.scope();
+                        gate.wait(&scope).await?; // every shard is ready
+                        for target in 0..client.shard_count() {
+                            let total = client
+                                .call(&scope, ShardId(target), 7, CallOptions::default())
+                                .await?;
+                            assert_eq!(total, 7);
+                        }
+                        node.shutdown();
+                        scope.cancelled().await;
+                        Ok::<(), Box<dyn Error>>(())
+                    }
+                }));
+            }
+            shard.run_application(Application::new("counter", root)).await
+        }
+    })
+    .expect("the node ran and stopped cleanly");
+```
+
+## Capabilities
 
 | Capability | API | Tests / docs |
 |---|---|---|
@@ -30,39 +88,6 @@ Part of [bapps](../README.md) 0.7.0, on `bapps-core`, the runtime in
 | A call carries the caller's deadline: its timeout is capped at the caller's remaining time, and the handler sees the same deadline | `ShardClient::call`, `bapps_trio::remaining` | `tests/deadline_propagation.rs`; [RPC contract](docs/rpc-contract.md#deadlines) |
 | Whole node in the deterministic lab | `lab::run_node` | `tests/lab.rs`; [architecture](docs/architecture.md#deterministic-node) |
 
-## First experiment
-
-Unpack alongside `bapps_trio` 0.5.1 and `bapps_otp` 0.5.1, then:
-
-```sh
-make validate
-make integration
-cargo run --example sharded_counter -- 2
-```
-
-The example constructs an independent `Rc<Cell<u64>>` counter on each executor, exposes a typed RPC endpoint as an OTP child, and runs a demo driver only on shard 0. It shuts down and joins the whole node when done. See [the example](examples/sharded_counter.rs).
-
-## Real API
-
-```rust,ignore
-AppBuilder::new()
-    .cpus(vec![4, 7]) // actual allowed Linux CPU IDs; or .shards(2)
-    .run::<Request, Reply, _, _>(|shard| {
-        // This factory runs inside its destination executor.
-        // Create Rc, local handles and !Send futures here.
-        async move {
-            let application = build_local_otp_application(&shard);
-            shard.run_application(application).await
-        }
-    })?;
-```
-
-`build_local_otp_application` is application code, not a framework API. The executable counter example shows the complete version.
-
-`ShardContext` gives the local ID/CPU, CPU list, typed `ShardClient`, `ShardInbox`, readiness gate and `NodeControl`. `bapps_app::serve` runs the inbox as an OTP child. `ShardClient::call` sends one owned request to one explicit `ShardId`; `M` and `R` must be `Send + 'static`. The call handle itself is `!Send`.
-
-There is intentionally no `spawn_remote`, generic `ShardedService` trait, cluster discovery, node-to-node transport, or magically distributed nursery. The per-shard factory is the first sharded-service composition primitive. A node-wide service is explicitly added on one selected shard, as in the example. Future APIs must earn their complexity from working applications.
-
 ## Guarantees and boundaries
 
 - One distinct pinned logical CPU per configured executor; no task migration between them.
@@ -73,7 +98,7 @@ There is intentionally no `spawn_remote`, generic `ShardedService` trait, cluste
 - Acknowledgement concerns handler termination, **not rollback**. Inconclusive termination is reported rather than retried.
 - A failed shard root/executor stops all shards; the host joins every executor thread. Automatic executor resurrection/rebalancing is out of scope.
 
-These are implementation contracts awaiting the new Linux test gate, not production certifications. No safe Rust API can preempt an OS thread stuck in blocking/CPU work; an external watchdog is required to force-kill a wedged process.
+No safe Rust API can preempt an OS thread stuck in blocking/CPU work; an external watchdog is required to force-kill a wedged process.
 
 ## Transport choice
 
@@ -81,4 +106,19 @@ Cross-core IPC uses **`async-channel` bounded MPSC queues**, plus per-call cance
 
 Stop/readiness signals use separate channels/control state, so a full data queue cannot prevent the host from requesting shutdown. Application admin RPCs do share the data-plane endpoint and can wait behind saturation.
 
-Read [architecture](docs/architecture.md), [CHANGELOG](CHANGELOG.md), [developer guide](docs/developer-guide.md), [RPC contract](docs/rpc-contract.md), and [performance plan](docs/performance.md).
+## Run
+
+```sh
+make validate                                            # from the workspace root
+make integration                                         # multicore suite on real threads
+cargo run -p bapps-app --example sharded_counter -- 2    # two pinned shards
+```
+
+## Documents
+
+- [Architecture](docs/architecture.md): host threads, per-executor worlds,
+  limits, the deterministic node.
+- [RPC contract](docs/rpc-contract.md): admission, outcomes, race precedence,
+  deadlines.
+- [Developer guide](docs/developer-guide.md); [performance plan](docs/performance.md).
+- [CHANGELOG](CHANGELOG.md); older notes in [docs/history](docs/history).
