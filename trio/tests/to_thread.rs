@@ -86,7 +86,7 @@ fn the_limiter_bounds_how_many_jobs_run_at_once() {
 
 #[test]
 fn a_job_cancelled_while_waiting_never_runs() {
-    let (result, ran) = LocalExecutor::default().run(async {
+    let (result, ran, holders) = LocalExecutor::default().run(async {
         let limiter = CapacityLimiter::new(1);
         let held = limiter.try_acquire().unwrap();
         let ran = Arc::new(AtomicBool::new(false));
@@ -97,19 +97,34 @@ fn a_job_cancelled_while_waiting_never_runs() {
                 scope,
                 to_thread::run_sync_with(&limiter, move |_| job_ran.store(true, Ordering::SeqCst)),
             ),
-            async move {
-                glommio::timer::sleep(Duration::from_millis(20)).await;
+            async {
+                // Cancel once the job is queued in the limiter: an explicit
+                // state, not a sleep that hopes it got there.
+                // Bounded, as a deadlock guard: a job that never queues fails
+                // the test instead of hanging it.
+                for _ in 0..100_000 {
+                    if limiter.waiting() > 0 {
+                        break;
+                    }
+                    futures_lite::future::yield_now().await;
+                }
+                assert_eq!(limiter.waiting(), 1, "the job never queued in the limiter");
                 canceller.cancel();
             },
         )
         .await
         .0;
         drop(held);
-        glommio::timer::sleep(Duration::from_millis(20)).await;
-        (result, ran.load(Ordering::SeqCst))
+        // Only this test holds `ran` now: the job's closure, which captured a
+        // clone, was dropped without being submitted, so it can never run.
+        (result, ran.load(Ordering::SeqCst), Arc::strong_count(&ran))
     });
     assert!(result.is_err(), "{result:?}");
     assert!(!ran, "a job cancelled before it started must not run");
+    assert_eq!(
+        holders, 1,
+        "the cancelled job was dropped, not kept for later"
+    );
 }
 
 #[test]
@@ -118,10 +133,12 @@ fn a_running_job_is_told_and_waited_for() {
         let scope = CancelScope::new();
         let canceller = scope.clone();
         let start = Instant::now();
+        let (running_tx, running) = async_channel::bounded(1);
         let result = futures_lite::future::zip(
             with_cancel_scope(
                 scope,
-                to_thread::run_sync(|cancel: &ThreadCancel| {
+                to_thread::run_sync(move |cancel: &ThreadCancel| {
+                    let _ = running_tx.send_blocking(());
                     let start = Instant::now();
                     while !cancel.is_cancelled() && start.elapsed() < Duration::from_secs(2) {
                         thread::sleep(Duration::from_millis(1));
@@ -130,7 +147,8 @@ fn a_running_job_is_told_and_waited_for() {
                 }),
             ),
             async move {
-                glommio::timer::sleep(Duration::from_millis(20)).await;
+                // Cancel once the job is running on its thread.
+                let _ = running.recv().await;
                 canceller.cancel();
             },
         )

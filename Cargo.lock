@@ -173,6 +173,7 @@ dependencies = [
 name = "bapps-trio"
 version = "0.7.0"
 dependencies = [
+ "async-channel",
  "bapps-core",
  "futures-lite",
  "task-local",
