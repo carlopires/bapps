@@ -7,9 +7,7 @@
 use std::{cell::Cell, rc::Rc, time::Duration};
 
 use bapps_otp::{Application, ChildSpec, Shutdown, Strategy, SupervisorSpec};
-use bapps_trio::{
-    CancelScope, TaskQueues, cancel_on, testing::TestClock, time::Clock, with_nursery,
-};
+use bapps_trio::{CancelScope, Clock, TaskQueues, cancel_on, testing::TestClock, with_nursery};
 use futures_lite::future;
 use glommio::LocalExecutor;
 

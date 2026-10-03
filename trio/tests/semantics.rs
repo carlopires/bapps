@@ -3,8 +3,7 @@ use std::{cell::Cell, rc::Rc, time::Duration};
 use bapps_trio::{
     CancelScope, FailAfterError, NurseryError, TaskQueues, fail_after, sleep,
     testing::{Sequencer, TestClock},
-    time::with_clock,
-    with_nursery, with_nursery_with_queues,
+    with_clock, with_nursery, with_nursery_with_queues,
 };
 use glommio::LocalExecutor;
 

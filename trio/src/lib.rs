@@ -18,19 +18,20 @@
 
 #![forbid(unsafe_code)]
 
-pub mod cancel;
-pub mod foreign;
-pub mod lab;
-pub mod nursery;
-pub mod obligation;
+mod cancel;
+mod foreign;
+mod lab;
+mod nursery;
+mod obligation;
 pub mod sync;
-pub mod task_class;
+mod task_class;
 pub mod testing;
-pub mod time;
+mod time;
 pub mod to_thread;
 
 pub use cancel::{
-    CancelCause, CancelReason, CancelScope, Cancelled, current_cancel_scope, with_cancel_scope,
+    CancelCause, CancelReason, CancelScope, Cancelled, CancelledFuture, current_cancel_scope,
+    with_cancel_scope,
 };
 pub use foreign::{cancel_on, cancel_on_any, cancel_on_current};
 pub use nursery::{

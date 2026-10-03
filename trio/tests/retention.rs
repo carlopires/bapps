@@ -15,10 +15,9 @@ use std::{
 };
 
 use bapps_trio::{
-    CancelScope,
+    CancelScope, Clock,
     sync::{Condition, Event},
     testing::{Sequencer, TestClock},
-    time::Clock,
     with_cancel_scope,
 };
 

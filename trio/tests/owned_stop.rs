@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use bapps_trio::{Nursery, StopOutcome, testing::TestClock, time::with_clock, with_nursery};
+use bapps_trio::{Nursery, StopOutcome, testing::TestClock, with_clock, with_nursery};
 use glommio::{LocalExecutor, timer::Timer};
 
 /// Poll `future` once and drop it.
