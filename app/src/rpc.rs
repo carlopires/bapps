@@ -68,10 +68,13 @@ impl RpcClock for TrioClock {
     }
 }
 
+/// Identifies one cross-shard call, for logs and cancellation messages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct CallId {
+    /// The calling shard.
     pub source: ShardId,
+    /// Its per-caller sequence number.
     pub sequence: u64,
 }
 
@@ -79,7 +82,9 @@ pub struct CallId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Interruption {
+    /// The caller's scope was cancelled.
     Cancelled,
+    /// The call's deadline passed.
     Deadline,
 }
 
@@ -94,8 +99,11 @@ pub enum Interruption {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CallError {
+    /// No shard with this index.
     InvalidShard(usize),
+    /// This shard already has `max_outbound` calls outstanding.
     Overloaded,
+    /// The node is stopping; nothing new is admitted.
     NodeStopping,
     /// The caller stopped before the destination queue admitted the request.
     /// It was never delivered, so it had no effect.
@@ -107,17 +115,23 @@ pub enum CallError {
     /// caller's cleanup grace; it is NOT a rollback guarantee. Without
     /// acknowledgement the request may still be running.
     Cancelled {
+        /// Whether the destination confirmed the request reached a terminal
+        /// state within the cleanup grace (not a rollback guarantee).
         acknowledged: bool,
     },
     /// Like `Cancelled`, for the request deadline.
     Deadline {
+        /// As for `Cancelled`.
         acknowledged: bool,
     },
     /// The destination destroyed the handler before it finished (forced
     /// stop after its cleanup grace, a generation force-abort or a panic).
     /// Effects, async cleanup and nested work cannot be certified.
     OutcomeUnknown,
+    /// The handler ran and returned this error.
     Remote(String),
+    /// The [`CallOptions`] were invalid (zero or above
+    /// [`RpcLimits::max_call_duration`]).
     InvalidOptions(String),
 }
 impl fmt::Display for CallError {
@@ -156,13 +170,20 @@ impl fmt::Display for CallError {
 }
 impl std::error::Error for CallError {}
 
+/// Every bound of the cross-shard transport; see the architecture docs.
+/// Set with [`AppBuilder::limits`](crate::AppBuilder::limits).
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct RpcLimits {
+    /// Requests that may queue for one destination shard (default 256).
     pub queue_capacity: usize,
+    /// Handlers that may run at once on one shard's inbox (default 128).
     pub max_in_flight: usize,
+    /// Calls one shard may have outstanding as a caller (default 256).
     pub max_outbound: usize,
+    /// Ceiling on any call, whatever its own timeout (default 30 s).
     pub max_call_duration: Duration,
+    /// How long a cancelled handler may run on to clean up (default 1 s).
     pub handler_cancel_grace: Duration,
 }
 impl Default for RpcLimits {
@@ -232,12 +253,17 @@ impl RpcLimits {
     }
 }
 
+/// Per-call settings for [`ShardClient::call`].
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct CallOptions {
+    /// Longest wait (default 5 s), further capped by the caller's remaining
+    /// time and by [`RpcLimits::max_call_duration`].
     pub timeout: Duration,
     /// Extra bounded time to await a terminal response after cancellation.
     pub cancellation_grace: Duration,
+    /// Scheduling class of the handler on the destination (default
+    /// `ForegroundRead`).
     pub task_class: TaskClass,
 }
 impl Default for CallOptions {
@@ -273,14 +299,23 @@ impl CallOptions {
     }
 }
 
+/// Counters of one side of the transport: from [`ShardClient::metrics`]
+/// (calls made by this shard) or [`ShardInbox::metrics`] (requests handled
+/// by this shard).
 #[derive(Debug, Clone, Copy, Default)]
 #[non_exhaustive]
 pub struct RpcMetrics {
+    /// Calls made (client) or requests received (inbox).
     pub submitted: u64,
+    /// Of those, finished.
     pub completed: u64,
+    /// Of those, cancelled, timed out or with an unknown outcome.
     pub interrupted: u64,
+    /// Calls outstanding (client) or handlers running (inbox) now.
     pub active: usize,
+    /// Requests waiting in the inbox queue (always 0 for a client).
     pub queued: usize,
+    /// `max_outbound` (client) or `queue_capacity` (inbox).
     pub capacity: usize,
 }
 #[derive(Default)]
@@ -359,17 +394,21 @@ impl<M: Send + 'static, R: Send + 'static> ShardClient<M, R> {
             }),
         }
     }
+    /// The shard this client calls from.
     pub fn shard_id(&self) -> ShardId {
         self.inner.id
     }
+    /// Shards in the node.
     pub fn shard_count(&self) -> usize {
         self.inner.senders.len()
     }
+    /// This shard's outgoing-call counters.
     pub fn metrics(&self) -> RpcMetrics {
         self.inner
             .counters
             .snapshot(0, self.inner.limits.max_outbound)
     }
+    /// Requests queued for shard `id`; `None` if it does not exist.
     pub fn queued_to(&self, id: ShardId) -> Option<usize> {
         self.inner.senders.get(id.0).map(Sender::len)
     }
@@ -560,11 +599,13 @@ impl<M, R> ShardInbox<M, R> {
             }),
         }
     }
+    /// This shard's incoming-request counters.
     pub fn metrics(&self) -> RpcMetrics {
         self.inner
             .counters
             .snapshot(self.inner.receiver.len(), self.inner.limits.queue_capacity)
     }
+    /// The shard this inbox belongs to.
     pub fn shard_id(&self) -> ShardId {
         self.inner.id
     }

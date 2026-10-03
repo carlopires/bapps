@@ -103,6 +103,9 @@ pub struct NodeControl {
     shared: Arc<NodeShared>,
 }
 impl NodeControl {
+    /// Request a node-wide stop: every shard's application is asked to stop
+    /// and readiness waiters are released; [`AppBuilder::run`] returns once
+    /// every shard has exited. Does not block; idempotent.
     pub fn shutdown(&self) {
         self.shared.phase.store(STOPPING, Ordering::Release);
         self.shared.ready.close();
@@ -110,6 +113,7 @@ impl NodeControl {
             let _ = sender.try_send(());
         }
     }
+    /// Whether a stop was requested.
     pub fn is_stopping(&self) -> bool {
         self.shared.phase.load(Ordering::Acquire) == STOPPING
     }
@@ -133,6 +137,12 @@ pub struct ReadyGate {
     control: NodeControl,
 }
 impl ReadyGate {
+    /// Wait until every shard of the node is ready.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::NodeStopped`] if the node stops first;
+    /// [`AppError::Cancelled`] if `scope` is cancelled first.
     pub async fn wait(&self, scope: &CancelScope) -> Result<(), AppError> {
         let _ = cancel_on(scope, self.signal.recv())
             .await
@@ -213,27 +223,35 @@ pub struct ShardContext<M: Send + 'static, R: Send + 'static> {
     pub(crate) host: HostSink,
 }
 impl<M: Send + 'static, R: Send + 'static> ShardContext<M, R> {
+    /// This shard's index.
     pub fn shard_id(&self) -> ShardId {
         self.id
     }
+    /// The CPU this shard's executor is pinned to.
     pub fn cpu_id(&self) -> usize {
         self.cpu
     }
+    /// Shards in the node.
     pub fn shard_count(&self) -> usize {
         self.cpus.len()
     }
+    /// Every shard's CPU, indexed by shard.
     pub fn cpu_ids(&self) -> &[usize] {
         &self.cpus
     }
+    /// A client for calling any shard (this one included).
     pub fn client(&self) -> ShardClient<M, R> {
         self.client.clone()
     }
+    /// This shard's inbox; serve it with [`serve`](crate::serve).
     pub fn inbox(&self) -> ShardInbox<M, R> {
         self.inbox.clone()
     }
+    /// Node-wide stop control.
     pub fn node_control(&self) -> NodeControl {
         self.control.clone()
     }
+    /// The node's readiness gate.
     pub fn ready_gate(&self) -> ReadyGate {
         self.gate.clone()
     }
@@ -315,6 +333,7 @@ impl Default for AppBuilder {
     }
 }
 impl AppBuilder {
+    /// One shard, default limits, a 30 s startup timeout.
     pub fn new() -> Self {
         Self {
             shards: 1,
@@ -324,6 +343,7 @@ impl AppBuilder {
             name: "bapps-app".into(),
         }
     }
+    /// Run `count` shards on the lowest allowed CPUs.
     pub fn shards(mut self, count: usize) -> Self {
         self.shards = count;
         self
@@ -334,14 +354,17 @@ impl AppBuilder {
         self.cpus = Some(cpus);
         self
     }
+    /// Cross-shard transport limits.
     pub fn limits(mut self, limits: RpcLimits) -> Self {
         self.limits = limits;
         self
     }
+    /// How long every shard has to become ready.
     pub fn startup_timeout(mut self, timeout: Duration) -> Self {
         self.startup_timeout = timeout;
         self
     }
+    /// Prefix of the executor thread names (`name-0`, `name-1`, ...).
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.name = name.into();
         self

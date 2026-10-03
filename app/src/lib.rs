@@ -7,6 +7,7 @@
 //! This is an educational framework, not an OTP/Seastar compatibility claim.
 //! See the developer guide for cancellation and node-failure boundaries.
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 mod cpu;
 pub mod lab;
