@@ -21,6 +21,46 @@ glommio = { package = "glommio-ng", version = "0.12" }
 in automatically by the default `macros` feature. You do not depend on it
 directly.
 
+## 0.12.0-cp.3 — carlopires fork, synced with dahankzter/glommio
+
+Merges the 29 commits dahankzter/glommio `master` gained after `v0.12.0-ng`
+(2026-09-04..07), each read before merging, plus one fix found in review.
+
+- **Timers: a slab-backed hierarchical wheel** replaces the staged wheel and
+  our 0.12.0-cp.2 `BTreeSet` index (the merge takes theirs; the wheel solves
+  the same scan with per-level occupancy bitmaps). Handles carry a
+  generation, so a stale handle cannot cancel a reused slot; removal fixes up
+  the entry `swap_remove` moves. Deadlines round up (a timer never fires
+  early; before, one sleep could register several times), sub-millisecond
+  sleeps are no longer rounded to a whole tick, a sleep polled again with the
+  same waker does not re-register, and due wakers are woken after the timer
+  structure is released, so a waker that arms a timer cannot double-borrow it.
+- **Fix found in review (ours):** `next_expiry` returned the earliest level-0
+  deadline without comparing it with the next cascade. Level 0 is filled
+  relative to now but levels cascade on aligned boundaries, so a timer 300
+  ticks out (level 1 until tick 256) was hidden by one inserted at tick 100
+  for tick 350: an idle reactor slept to 350 and fired the first 50 ms late
+  (up to ~255 ms). Regression test
+  `a_level_one_timer_is_not_hidden_by_a_later_level_zero_timer`.
+- **Cancellation tokens** no longer keep one waker per poll: registrations
+  take a reusable slot, are refreshed on re-poll and withdrawn on drop (local
+  and foreign tokens).
+- **`OnceCell`**: an initializer no longer overwrites a value another task
+  published while it awaited.
+- **Sockets**: a read times out when its deadline has passed, not when its
+  timer is merely absent (it is also absent after a cancellation).
+- **io_uring support check**: EMFILE/ENFILE/ENOMEM while probing is no longer
+  cached as "unsupported" forever; compile-time check that the timespec
+  layout matches `io-uring`'s. (The io-uring crate switch itself, `8c881a5`,
+  was already in our base; it is the same change as merged upstream.)
+- Dev only: criterion benchmarks for spawn and timers, a timer ladder
+  example, timer counters behind the `debugging` feature.
+
+Not merged: the 30 commits on the community fork `glommio/glommio` after
+2026-09-07 (eventfd leak #448, task-lifecycle leak #51, executor parking).
+They conflict with this fork in 27 files of the task and executor core,
+where the two forks implemented the same PRs differently.
+
 ## 0.12.0-cp.2 — carlopires fork
 
 Perf: the reactor found the next timer deadline by scanning every live timer
