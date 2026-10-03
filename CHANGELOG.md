@@ -21,6 +21,37 @@ glommio = { package = "glommio-ng", version = "0.12" }
 in automatically by the default `macros` feature. You do not depend on it
 directly.
 
+## 0.12.0-cp.4 — carlopires fork, selected community glommio fixes
+
+Five of the 30 commits on community `glommio/glommio` since 2026-09-07,
+each read and checked against this fork. The rest wait for dahankzter to
+re-sync his fork with the community one (see below).
+
+- **Executor parked with runnable task queues** (community `35a0205`). When
+  preemption stopped a pass over the task queues, the executor could park
+  with queues still runnable, and nothing would wake it. The pass now returns
+  `Idle` or `Runnable` and the executor parks only on `Idle`, with a debug
+  assertion. Community's regression test never reaches the path here, but
+  a probe counted 115,301 `Runnable` returns during RUDB's churn and restart
+  soaks: the path is hot in our workload.
+- **sysfs list without a trailing terminator** (`3c8c367`) parsed the same
+  error forever; cache-domain detection discards errors, so it looped.
+- **Task header dropped in `destroy`** (from `e657058`, #448). Community's
+  header owned the sleep notifier and leaked it; ours holds indices (the
+  fork's version of #32), so that leak never existed here. The only field
+  with a destructor is `awaiter`, which `notify` takes out on every path we
+  found; kept as a backstop, matching async-task. A new test guards the
+  detached-handle path.
+- `DmaFile` API revert to the community version (`8fb94b0`) and a
+  shared-channel test flake fix (`20d108c`).
+
+Already here in dahankzter's version: MSG_ZEROCOPY removal (`38844f6`),
+non-panicking spawn, custom-queue panics, cache-aware placement (#31),
+accept without the O_NONBLOCK toggle (#48), task header indices (#32).
+Not taken yet: the task-lifecycle and teardown rewrite (#51, about 5,000
+lines, built on community's #32), the `Result` payload default, clock-read
+and timeout changes, std TLS, and CI or comment-style conversions.
+
 ## 0.12.0-cp.3 — carlopires fork, synced with dahankzter/glommio
 
 Merges the 29 commits dahankzter/glommio `master` gained after `v0.12.0-ng`
