@@ -1212,11 +1212,13 @@ mod foreign_tests {
 
     #[test]
     fn a_foreign_thread_can_send_into_an_executor() {
+        let (connected_tx, connected_rx) = std::sync::mpsc::channel();
         let (sender, receiver) = new_bounded(16);
 
         let consumer = LocalExecutorBuilder::new(Placement::Unbound)
             .spawn(move || async move {
                 let mut receiver = receiver.connect().await;
+                connected_tx.send(()).unwrap();
                 let mut seen = Vec::new();
                 while let Some(value) = receiver.next().await {
                     seen.push(value);
@@ -1232,6 +1234,9 @@ mod foreign_tests {
             .spawn(move || async move {
                 let sender = sender.connect().await;
                 handoff.send(sender.into_foreign()).unwrap();
+                // The consumer connects before this executor exits (see
+                // a_parked_executor_is_woken_by_a_foreign_send).
+                connected_rx.recv().unwrap();
             })
             .unwrap();
 
@@ -1296,6 +1301,7 @@ mod foreign_tests {
 
     #[test]
     fn a_full_channel_hands_the_value_back() {
+        let (connected_tx, connected_rx) = std::sync::mpsc::channel();
         let (sender, receiver) = new_bounded(1);
 
         let (handoff, collect) = std::sync::mpsc::channel();
@@ -1303,6 +1309,7 @@ mod foreign_tests {
         let consumer = LocalExecutorBuilder::new(Placement::Unbound)
             .spawn(move || async move {
                 let mut receiver = receiver.connect().await;
+                connected_tx.send(()).unwrap();
                 // Hold the channel full until the test says otherwise.
                 wait.recv().unwrap();
                 let mut seen = Vec::new();
@@ -1317,6 +1324,9 @@ mod foreign_tests {
             .spawn(move || async move {
                 let sender = sender.connect().await;
                 handoff.send(sender.into_foreign()).unwrap();
+                // The consumer connects before this executor exits (see
+                // a_parked_executor_is_woken_by_a_foreign_send).
+                connected_rx.recv().unwrap();
             })
             .unwrap()
             .join()
@@ -1349,11 +1359,13 @@ mod foreign_tests {
 
     #[test]
     fn dropping_the_foreign_sender_closes_the_channel() {
+        let (connected_tx, connected_rx) = std::sync::mpsc::channel();
         let (sender, receiver) = new_bounded(4);
 
         let consumer = LocalExecutorBuilder::new(Placement::Unbound)
             .spawn(move || async move {
                 let mut receiver = receiver.connect().await;
+                connected_tx.send(()).unwrap();
                 let mut count = 0;
                 while receiver.next().await.is_some() {
                     count += 1;
@@ -1367,6 +1379,9 @@ mod foreign_tests {
             .spawn(move || async move {
                 let sender = sender.connect().await;
                 handoff.send(sender.into_foreign()).unwrap();
+                // The consumer connects before this executor exits (see
+                // a_parked_executor_is_woken_by_a_foreign_send).
+                connected_rx.recv().unwrap();
             })
             .unwrap()
             .join()
