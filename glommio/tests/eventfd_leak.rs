@@ -222,7 +222,16 @@ fn a_bare_executor_lifecycle_does_not_grow_the_descriptor_count() {
     for _ in 0..20 {
         LocalExecutor::default().run(async {});
     }
-    let after = count_open_fds();
+    // A descriptor closes when its last owner drops it, and that is not always
+    // done the instant `run` returns (community glommio 09373d7 hit the same
+    // thing). Wait for the count to settle: a leak -- one descriptor per
+    // lifecycle -- never comes back down, so this costs a real one nothing.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut after = count_open_fds();
+    while after > before && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        after = count_open_fds();
+    }
 
     // Not equality: the count may legitimately fall, since descriptors held
     // lazily elsewhere in the process can be released during the run. What
