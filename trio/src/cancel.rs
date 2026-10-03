@@ -11,6 +11,7 @@ use std::{
     pin::Pin,
     rc::Rc,
     task::{Context, Poll},
+    time::Duration,
 };
 
 use task_local::task_local;
@@ -97,6 +98,9 @@ fn next_sequence() -> u64 {
 struct CancelNode {
     cancelled: Cell<bool>,
     cause: RefCell<Option<CancelCause>>,
+    /// When this scope's own deadline expires, on the clock that set it
+    /// ([`crate::current_clock`]). Set by the deadline helpers.
+    deadline: Cell<Option<Duration>>,
     parents: Vec<Rc<CancelNode>>,
     waiters: WaitList,
 }
@@ -178,6 +182,7 @@ impl CancelScope {
             inner: Rc::new(CancelNode {
                 cancelled: Cell::new(false),
                 cause: RefCell::new(None),
+                deadline: Cell::new(None),
                 parents,
                 waiters: WaitList::default(),
             }),
@@ -241,6 +246,30 @@ impl CancelScope {
 
     pub fn is_cancelled(&self) -> bool {
         self.inner.effective_cancelled()
+    }
+
+    /// This scope's own deadline, if a deadline helper ([`crate::fail_after`],
+    /// [`crate::fail_at`], [`crate::move_on_after`], [`crate::move_on_at`])
+    /// created it. A time on [`crate::current_clock`].
+    pub fn deadline(&self) -> Option<Duration> {
+        self.inner.deadline.get()
+    }
+
+    pub(crate) fn set_deadline(&self, deadline: Duration) {
+        self.inner.deadline.set(Some(deadline));
+    }
+
+    /// The earliest deadline among this scope and every scope it inherits
+    /// cancellation from: the time by which this scope will be cancelled at
+    /// the latest, unless someone cancels it sooner. A shielded scope is a new
+    /// root, so outer deadlines do not reach it; a scope with several owners
+    /// ([`Self::any`]) takes the earliest of theirs.
+    pub fn effective_deadline(&self) -> Option<Duration> {
+        self.inner
+            .lineage()
+            .iter()
+            .filter_map(|node| node.deadline.get())
+            .min()
     }
 
     /// The reason of [`Self::cause`].

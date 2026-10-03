@@ -39,8 +39,9 @@ pub use nursery::{
 pub use obligation::{Obligation, ObligationStats, obligation_stats};
 pub use task_class::{TaskClass, TaskQueues};
 pub use time::{
-    Clock, ClockRef, FailAfterError, MoveOnOutcome, RealClock, current_clock, fail_after,
-    fail_after_shielded, move_on_after, sleep, sleep_until, with_clock,
+    Clock, ClockRef, FailAfterError, MoveOnOutcome, RealClock, current_clock,
+    current_effective_deadline, fail_after, fail_after_shielded, fail_at, move_on_after,
+    move_on_at, remaining, sleep, sleep_until, with_clock,
 };
 
 /// Boxed, executor-local future used where a callback must borrow from a

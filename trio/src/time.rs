@@ -136,9 +136,23 @@ enum DeadlineOutcome<T> {
     Cancelled(Cancelled),
 }
 
+/// The current task's effective deadline: the earliest deadline among the
+/// current cancel scope and every scope it inherits from (see
+/// [`CancelScope::effective_deadline`]). A time on [`current_clock`]; `None`
+/// when no enclosing deadline exists.
+pub fn current_effective_deadline() -> Option<Duration> {
+    current_cancel_scope().and_then(|scope| scope.effective_deadline())
+}
+
+/// How long until [`current_effective_deadline`], zero once it has passed.
+/// Pass this to a remote call so the callee works within the caller's time.
+pub fn remaining() -> Option<Duration> {
+    current_effective_deadline().map(|deadline| deadline.saturating_sub(current_clock().now()))
+}
+
 async fn run_deadline<R, F, Fut>(
     scope: CancelScope,
-    duration: Duration,
+    deadline: Duration,
     body: F,
 ) -> DeadlineOutcome<R>
 where
@@ -146,7 +160,7 @@ where
     Fut: Future<Output = R>,
 {
     let clock = current_clock();
-    let deadline = clock.now().saturating_add(duration);
+    scope.set_deadline(deadline);
 
     let body_scope = scope.clone();
     let body_future = async move { body(body_scope).await };
@@ -179,57 +193,33 @@ where
             DeadlineOutcome::Cancelled(cancelled)
         }
         DeadlineOutcome::TimedOut => {
-            scope.cancel_by(CancelReason::Deadline, format!("deadline of {duration:?}"));
+            scope.cancel_by(CancelReason::Deadline, format!("deadline at {deadline:?}"));
             let _ = body_future.await;
             DeadlineOutcome::TimedOut
         }
     }
 }
 
-pub async fn fail_after<R, F, Fut>(duration: Duration, body: F) -> Result<R, FailAfterError>
-where
-    F: FnOnce(CancelScope) -> Fut,
-    Fut: Future<Output = R>,
-{
-    let scope = current_cancel_scope()
+fn child_of_current() -> CancelScope {
+    current_cancel_scope()
         .map(|parent| parent.child())
-        .unwrap_or_default();
-    match run_deadline(scope, duration, body).await {
+        .unwrap_or_default()
+}
+
+fn after(duration: Duration) -> Duration {
+    current_clock().now().saturating_add(duration)
+}
+
+fn fail_outcome<R>(outcome: DeadlineOutcome<R>) -> Result<R, FailAfterError> {
+    match outcome {
         DeadlineOutcome::Body(value) => Ok(value),
         DeadlineOutcome::TimedOut => Err(FailAfterError::TooSlow),
         DeadlineOutcome::Cancelled(cancelled) => Err(FailAfterError::Cancelled(cancelled)),
     }
 }
 
-/// Run a deadline in a fresh scope that does not inherit outer cancellation.
-///
-/// This is for bounded cleanup or a durability-critical transition. It should
-/// not be used to make ordinary work ignore caller cancellation.
-pub async fn fail_after_shielded<R, F, Fut>(
-    duration: Duration,
-    body: F,
-) -> Result<R, FailAfterError>
-where
-    F: FnOnce(CancelScope) -> Fut,
-    Fut: Future<Output = R>,
-{
-    let scope = CancelScope::new();
-    match run_deadline(scope, duration, body).await {
-        DeadlineOutcome::Body(value) => Ok(value),
-        DeadlineOutcome::TimedOut => Err(FailAfterError::TooSlow),
-        DeadlineOutcome::Cancelled(cancelled) => Err(FailAfterError::Cancelled(cancelled)),
-    }
-}
-
-pub async fn move_on_after<R, F, Fut>(duration: Duration, body: F) -> MoveOnOutcome<R>
-where
-    F: FnOnce(CancelScope) -> Fut,
-    Fut: Future<Output = R>,
-{
-    let scope = current_cancel_scope()
-        .map(|parent| parent.child())
-        .unwrap_or_default();
-    match run_deadline(scope, duration, body).await {
+fn move_on_outcome<R>(outcome: DeadlineOutcome<R>) -> MoveOnOutcome<R> {
+    match outcome {
         DeadlineOutcome::Body(value) => MoveOnOutcome {
             value: Some(value),
             timed_out: false,
@@ -246,6 +236,59 @@ where
             cancelled: true,
         },
     }
+}
+
+/// Run `body` in a child scope cancelled `duration` from now; a timeout is
+/// [`FailAfterError::TooSlow`].
+pub async fn fail_after<R, F, Fut>(duration: Duration, body: F) -> Result<R, FailAfterError>
+where
+    F: FnOnce(CancelScope) -> Fut,
+    Fut: Future<Output = R>,
+{
+    fail_at(after(duration), body).await
+}
+
+/// Like [`fail_after`], with an absolute deadline on [`current_clock`].
+pub async fn fail_at<R, F, Fut>(deadline: Duration, body: F) -> Result<R, FailAfterError>
+where
+    F: FnOnce(CancelScope) -> Fut,
+    Fut: Future<Output = R>,
+{
+    fail_outcome(run_deadline(child_of_current(), deadline, body).await)
+}
+
+/// Run a deadline in a fresh scope that does not inherit outer cancellation.
+///
+/// This is for bounded cleanup or a durability-critical transition. It should
+/// not be used to make ordinary work ignore caller cancellation.
+pub async fn fail_after_shielded<R, F, Fut>(
+    duration: Duration,
+    body: F,
+) -> Result<R, FailAfterError>
+where
+    F: FnOnce(CancelScope) -> Fut,
+    Fut: Future<Output = R>,
+{
+    fail_outcome(run_deadline(CancelScope::new(), after(duration), body).await)
+}
+
+/// Run `body` in a child scope cancelled `duration` from now; a timeout is
+/// reported in the outcome, not as an error.
+pub async fn move_on_after<R, F, Fut>(duration: Duration, body: F) -> MoveOnOutcome<R>
+where
+    F: FnOnce(CancelScope) -> Fut,
+    Fut: Future<Output = R>,
+{
+    move_on_at(after(duration), body).await
+}
+
+/// Like [`move_on_after`], with an absolute deadline on [`current_clock`].
+pub async fn move_on_at<R, F, Fut>(deadline: Duration, body: F) -> MoveOnOutcome<R>
+where
+    F: FnOnce(CancelScope) -> Fut,
+    Fut: Future<Output = R>,
+{
+    move_on_outcome(run_deadline(child_of_current(), deadline, body).await)
 }
 
 /// Manual monotonic clock for deterministic tests.
