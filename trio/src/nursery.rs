@@ -48,6 +48,37 @@ impl std::fmt::Display for SpawnError {
 
 impl std::error::Error for SpawnError {}
 
+impl<E: std::fmt::Display> std::fmt::Display for NurseryError<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Child(error) => write!(f, "a child task failed: {error}"),
+            Self::Panicked => f.write_str("a child task panicked"),
+            Self::Cancelled(cancelled) => write!(f, "the nursery was stopped ({cancelled})"),
+        }
+    }
+}
+
+impl<E: std::fmt::Debug + std::fmt::Display> std::error::Error for NurseryError<E> {}
+
+impl<E: std::fmt::Display> std::fmt::Display for StartError<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Spawn(error) => write!(f, "the task could not be spawned: {error}"),
+            Self::Exited => f.write_str("the task exited before reporting readiness"),
+            Self::Child(error) => write!(f, "the task failed before reporting readiness: {error}"),
+            Self::Panicked => f.write_str("the task panicked before reporting readiness"),
+            Self::Cancelled(cancelled) => {
+                write!(
+                    f,
+                    "the task was stopped before reporting readiness ({cancelled})"
+                )
+            }
+        }
+    }
+}
+
+impl<E: std::fmt::Debug + std::fmt::Display> std::error::Error for StartError<E> {}
+
 /// Why a nursery failed. A nursery fails with the first child error; later
 /// ones are dropped, since their siblings were already being cancelled.
 #[derive(Debug)]
