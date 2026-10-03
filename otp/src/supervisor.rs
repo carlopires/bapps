@@ -22,6 +22,8 @@ use crate::{
     registry::OwnerId,
 };
 
+/// A supervisor: its children in start order, its strategy and its restart
+/// intensity.
 #[derive(Clone)]
 pub struct SupervisorSpec {
     name: &'static str,
@@ -31,6 +33,7 @@ pub struct SupervisorSpec {
 }
 
 impl SupervisorSpec {
+    /// A supervisor with no children and the default restart intensity.
     pub fn new(name: &'static str, strategy: Strategy) -> Self {
         Self {
             name,
@@ -40,6 +43,8 @@ impl SupervisorSpec {
         }
     }
 
+    /// Give up (and fail to the parent) after more than `max_restarts`
+    /// restarts within `within`.
     pub fn restart_intensity(mut self, max_restarts: usize, within: Duration) -> Self {
         self.intensity = RestartIntensity {
             max_restarts,
@@ -48,24 +53,28 @@ impl SupervisorSpec {
         self
     }
 
+    /// Add a child; children start in the order added and stop in reverse.
     pub fn child(mut self, child: ChildSpec) -> Self {
         self.children.push(child);
         self
     }
 
+    /// Its name.
     pub fn name(&self) -> &'static str {
         self.name
     }
 
+    /// Its restart strategy.
     pub fn strategy(&self) -> Strategy {
         self.strategy
     }
 
+    /// Its children, in start order.
     pub fn children(&self) -> &[ChildSpec] {
         &self.children
     }
 
-    pub async fn run_root(
+    pub(crate) async fn run_root(
         self,
         shutdown: CancelScope,
         queues: TaskQueues,
@@ -80,7 +89,7 @@ impl SupervisorSpec {
     /// Run a root supervisor and signal readiness only after every child has
     /// completed its startup handshake. Used by a node-wide startup barrier.
     #[allow(clippy::too_many_arguments)]
-    pub async fn run_root_started(
+    pub(crate) async fn run_root_started(
         self,
         shutdown: CancelScope,
         queues: TaskQueues,
@@ -672,7 +681,7 @@ enum MainOutcome {
 
 #[allow(clippy::too_many_arguments)]
 async fn run_service(
-    factory: crate::ServiceFactory,
+    factory: crate::child::ServiceFactory,
     child_name: &'static str,
     path: String,
     queues: TaskQueues,

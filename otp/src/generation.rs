@@ -40,6 +40,8 @@ impl GenerationPhase {
     }
 }
 
+/// Liveness of one generation of a service: handles keep a clone and fail
+/// fast once a restart has replaced their generation.
 #[derive(Clone)]
 pub struct ServiceGeneration {
     inner: Rc<Inner>,
@@ -54,11 +56,15 @@ struct Inner {
     changed: Condition,
 }
 
+/// A call reached a generation that no longer accepts work.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ServiceUnavailable {
+    /// The service's path.
     pub path: String,
+    /// The generation that refused.
     pub generation: u64,
+    /// Its phase at the time.
     pub phase: GenerationPhase,
 }
 
@@ -92,14 +98,17 @@ impl ServiceGeneration {
         }
     }
 
+    /// The service's path in the runtime tree.
     pub fn path(&self) -> &str {
         &self.inner.path
     }
 
+    /// This generation's number (increases with every restart).
     pub fn id(&self) -> u64 {
         self.inner.id
     }
 
+    /// This generation's current phase.
     pub fn phase(&self) -> GenerationPhase {
         if !self.inner.alive.get() {
             GenerationPhase::Stopped
@@ -156,6 +165,11 @@ impl ServiceGeneration {
         Ok(CancelScope::any([caller.clone(), self.scope()]))
     }
 
+    /// Wait until this generation has stopped.
+    ///
+    /// # Errors
+    ///
+    /// [`Cancelled`] when the current cancel scope is cancelled first.
     pub async fn wait_stopped(&self) -> Result<(), Cancelled> {
         while self.is_alive() {
             let observed = self.inner.changed.generation();

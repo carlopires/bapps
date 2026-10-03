@@ -19,16 +19,20 @@ struct TreeState {
     history: HashMap<String, VecDeque<ExitRecord>>,
 }
 
+/// The live supervision tree of an application: status, generations,
+/// restarts and recent exits of every supervisor and child.
 #[derive(Clone, Default)]
 pub struct RuntimeTree {
     inner: Rc<RefCell<TreeState>>,
 }
 
 impl RuntimeTree {
+    /// An empty tree.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Every node, supervisors and children.
     pub fn snapshot(&self) -> Vec<TreeNodeSnapshot> {
         let paths: Vec<String> = self.inner.borrow().nodes.keys().cloned().collect();
         let mut nodes: Vec<_> = paths.iter().filter_map(|path| self.get(path)).collect();
@@ -36,12 +40,14 @@ impl RuntimeTree {
         nodes
     }
 
+    /// The node at `path`.
     pub fn get(&self, path: &str) -> Option<TreeNodeSnapshot> {
         let state = self.inner.borrow();
         let node = state.nodes.get(path)?.clone();
         Some(enrich(node, &state))
     }
 
+    /// The child at `path`, if it is a child.
     pub fn child(&self, path: &str) -> Option<ChildSnapshot> {
         match self.get(path) {
             Some(TreeNodeSnapshot::Child(child)) => Some(child),
@@ -49,6 +55,7 @@ impl RuntimeTree {
         }
     }
 
+    /// The supervisor at `path`, if it is one.
     pub fn supervisor(&self, path: &str) -> Option<SupervisorSnapshot> {
         match self.get(path) {
             Some(TreeNodeSnapshot::Supervisor(supervisor)) => Some(supervisor),
@@ -56,6 +63,7 @@ impl RuntimeTree {
         }
     }
 
+    /// The last exits recorded at `path` (up to 32), oldest first.
     pub fn history(&self, path: &str) -> Vec<ExitRecord> {
         self.inner
             .borrow()

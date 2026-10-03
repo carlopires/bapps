@@ -11,7 +11,7 @@ validate:
 	cargo clippy $(PLATFORM) --all-targets --all-features --locked -- -D warnings
 	cargo clippy $(CORE) --all-targets --locked -- -D warnings
 	cargo test --workspace --locked
-	cargo doc --no-deps $(PLATFORM) --locked
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps $(PLATFORM) --locked
 
 # Real threads on real CPUs: the app crate's multicore suite.
 integration:

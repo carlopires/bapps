@@ -8,9 +8,12 @@ use crate::{
     registry::OwnerId,
 };
 
-pub type ServiceFuture = Pin<Box<dyn Future<Output = Result<(), String>> + 'static>>;
-pub type ServiceFactory = Rc<dyn Fn(ChildContext, TaskStatus<()>) -> ServiceFuture>;
+pub(crate) type ServiceFuture = Pin<Box<dyn Future<Output = Result<(), String>> + 'static>>;
+pub(crate) type ServiceFactory = Rc<dyn Fn(ChildContext, TaskStatus<()>) -> ServiceFuture>;
 
+/// What a service gets when its generation starts: its identity, cancel
+/// scope, scheduling queues, registry, runtime tree, mailbox and task
+/// factory, all owned by this generation.
 #[derive(Clone)]
 pub struct ChildContext {
     name: &'static str,
@@ -50,26 +53,33 @@ impl ChildContext {
         }
     }
 
+    /// The child's name in its supervisor.
     pub fn name(&self) -> &'static str {
         self.name
     }
 
+    /// The child's path in the runtime tree (`root/sup/child`).
     pub fn path(&self) -> &str {
         &self.path
     }
 
+    /// This generation's cancel scope: cancelled when the supervisor stops or
+    /// restarts the child. Long-running loops should exit when it is.
     pub fn scope(&self) -> CancelScope {
         self.scope.clone()
     }
 
+    /// The shard's scheduling queues.
     pub fn queues(&self) -> TaskQueues {
         self.queues.clone()
     }
 
+    /// The shard's service registry.
     pub fn registry(&self) -> Registry {
         self.registry.clone()
     }
 
+    /// The shard's runtime tree.
     pub fn tree(&self) -> RuntimeTree {
         self.tree.clone()
     }
@@ -98,6 +108,13 @@ impl ChildContext {
         (sender, receiver)
     }
 
+    /// Advertise `value` under `key` for this generation only: the entry stops
+    /// being advertised once the generation drains and is removed when it
+    /// exits, so a restarted service registers afresh.
+    ///
+    /// # Errors
+    ///
+    /// [`RegistryError::AlreadyRegistered`] when another owner holds `key`.
     pub fn register<T>(&self, key: ServiceKey<T>, value: T) -> Result<(), RegistryError>
     where
         T: Clone + 'static,
@@ -106,6 +123,8 @@ impl ChildContext {
             .register_owned(key, value, self.owner, self.generation.clone())
     }
 
+    /// Look up a service another child registered; `None` if absent or its
+    /// generation is draining.
     pub fn service<T>(&self, key: ServiceKey<T>) -> Option<T>
     where
         T: Clone + 'static,
@@ -114,6 +133,8 @@ impl ChildContext {
     }
 }
 
+/// How a supervisor starts and restarts one child: its factory, restart
+/// policy, shutdown policy and scheduling class.
 #[derive(Clone)]
 pub struct ChildSpec {
     pub(crate) name: &'static str,
@@ -125,6 +146,10 @@ pub struct ChildSpec {
 }
 
 impl ChildSpec {
+    /// A worker: `factory` runs one generation of the service and reports
+    /// readiness through its [`TaskStatus`]. Any displayable error it returns
+    /// is a failure (see [`ExitReason::Failure`](crate::ExitReason::Failure)). Defaults: permanent restart,
+    /// a graceful shutdown, the default task class.
     pub fn worker<F, Fut, E>(name: &'static str, factory: F) -> Self
     where
         F: Fn(ChildContext, TaskStatus<()>) -> Fut + 'static,
@@ -147,6 +172,7 @@ impl ChildSpec {
         }
     }
 
+    /// A nested supervisor as a child.
     pub fn supervisor(name: &'static str, supervisor: SupervisorSpec) -> Self {
         Self::worker(name, move |ctx, status| {
             let supervisor = supervisor.clone();
@@ -155,20 +181,24 @@ impl ChildSpec {
         .child_type(ChildType::Supervisor)
     }
 
+    /// When to restart this child (default [`Restart::Permanent`]).
     pub fn restart(mut self, restart: Restart) -> Self {
         self.restart = restart;
         self
     }
 
+    /// How to stop this child.
     pub fn shutdown(mut self, shutdown: Shutdown) -> Self {
         self.shutdown = shutdown;
         self
     }
 
+    /// Stop cooperatively, force-abort after `grace`.
     pub fn shutdown_after(self, grace: Duration) -> Self {
         self.shutdown(Shutdown::Graceful(grace))
     }
 
+    /// The scheduling class the service runs in.
     pub fn task_class(mut self, task_class: TaskClass) -> Self {
         self.task_class = task_class;
         self
@@ -179,23 +209,28 @@ impl ChildSpec {
         self
     }
 
+    /// The child's name.
     pub fn name(&self) -> &'static str {
         self.name
     }
 
+    /// Its restart policy.
     pub fn restart_policy(&self) -> Restart {
         self.restart
     }
 
+    /// Its shutdown policy.
     pub fn shutdown_policy(&self) -> Shutdown {
         self.shutdown
     }
 
-    pub fn task_class_value(&self) -> TaskClass {
+    /// Its scheduling class.
+    pub fn scheduling_class(&self) -> TaskClass {
         self.task_class
     }
 
-    pub fn child_type_value(&self) -> ChildType {
+    /// Worker or supervisor.
+    pub fn child_kind(&self) -> ChildType {
         self.child_type
     }
 }

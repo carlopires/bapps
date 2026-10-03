@@ -4,25 +4,41 @@ use bapps_trio::{NurseryError, StartError};
 
 use crate::ExitReason;
 
+/// Why a supervisor, and with it its application, stopped abnormally.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum OtpError {
+    /// A child exited instead of reporting readiness.
     ChildStartFailed {
+        /// Its path.
         child: String,
+        /// How it exited.
         reason: ExitReason,
     },
+    /// The readiness handshake broke: the parent stopped waiting for this
+    /// child's readiness.
     ChildStartProtocol {
+        /// Its path.
         child: String,
+        /// What went wrong.
         detail: String,
     },
+    /// Children failed more often than the supervisor's restart intensity
+    /// allows; the supervisor gave up and escalated.
     RestartIntensityExceeded {
+        /// The supervisor's path.
         supervisor: String,
+        /// Restarts within the window.
         restarts: usize,
+        /// The allowed maximum.
         max_restarts: usize,
+        /// The window.
         within: Duration,
     },
+    /// The supervisor's own task group failed.
     Nursery(String),
-    Registry(String),
+    /// An internal supervisor wait ended unexpectedly. Indicates a bug in this
+    /// crate; please report it.
     Application(String),
 }
 
@@ -45,7 +61,6 @@ impl fmt::Display for OtpError {
                 "supervisor {supervisor} exceeded restart intensity: {restarts} restarts (max {max_restarts}) within {within:?}"
             ),
             Self::Nursery(detail) => write!(f, "structured-concurrency failure: {detail}"),
-            Self::Registry(detail) => write!(f, "registry failure: {detail}"),
             Self::Application(detail) => write!(f, "application failure: {detail}"),
         }
     }

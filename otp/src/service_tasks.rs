@@ -60,6 +60,7 @@ impl ServiceTasks {
         }
     }
 
+    /// Tasks still running.
     pub fn active_tasks(&self) -> usize {
         self.stats.active()
     }
@@ -76,14 +77,22 @@ impl ServiceTasks {
         Ok(())
     }
 
+    /// The scope of this generation's tasks.
     pub fn cancellation_scope(&self) -> CancelScope {
         self.lifetime.clone()
     }
 
+    /// Ask every task to stop.
     pub fn cancel_all(&self) {
         self.lifetime.cancel();
     }
 
+    /// Spawn a task owned by this generation: it is cancelled when the
+    /// generation stops. A task error fails the service generation.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError`] when the generation is stopping.
     pub fn spawn<F, Fut, E>(&self, task: F) -> Result<(), SpawnError>
     where
         F: FnOnce(CancelScope) -> Fut + 'static,
@@ -93,6 +102,11 @@ impl ServiceTasks {
         self.spawn_into(TaskClass::Default, task)
     }
 
+    /// Like `spawn`, in the queue of `class`.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError`] when the generation is stopping.
     pub fn spawn_into<F, Fut, E>(&self, class: TaskClass, task: F) -> Result<(), SpawnError>
     where
         F: FnOnce(CancelScope) -> Fut + 'static,

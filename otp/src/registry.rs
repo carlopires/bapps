@@ -11,6 +11,7 @@ use std::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct OwnerId(pub(crate) u64);
 
+/// A typed name for a service in a [`Registry`]; usually a `static`.
 #[derive(Debug)]
 pub struct ServiceKey<T: 'static> {
     name: &'static str,
@@ -26,6 +27,7 @@ impl<T: 'static> Clone for ServiceKey<T> {
 }
 
 impl<T: 'static> ServiceKey<T> {
+    /// A key named `name` (unique per type).
     pub const fn new(name: &'static str) -> Self {
         Self {
             name,
@@ -33,6 +35,7 @@ impl<T: 'static> ServiceKey<T> {
         }
     }
 
+    /// Its name.
     pub const fn name(&self) -> &'static str {
         self.name
     }
@@ -60,15 +63,23 @@ impl Entry {
     }
 }
 
+/// Typed, shard-local service lookup. Entries registered by a service
+/// generation ([`ChildContext::register`](crate::ChildContext::register))
+/// disappear with it; global entries stay until removed.
 #[derive(Clone, Default)]
 pub struct Registry {
     inner: Rc<RefCell<HashMap<RegistryKey, Entry>>>,
 }
 
+/// Why a registration failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RegistryError {
-    AlreadyRegistered { name: &'static str },
+    /// Another owner already holds this key.
+    AlreadyRegistered {
+        /// The key's name.
+        name: &'static str,
+    },
 }
 
 impl fmt::Display for RegistryError {
@@ -82,10 +93,17 @@ impl fmt::Display for RegistryError {
 impl std::error::Error for RegistryError {}
 
 impl Registry {
+    /// An empty registry.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Register a value with no owning generation (shard-wide resources such
+    /// as a byte budget).
+    ///
+    /// # Errors
+    ///
+    /// [`RegistryError::AlreadyRegistered`] when the key is taken.
     pub fn register_global<T>(&self, key: ServiceKey<T>, value: T) -> Result<(), RegistryError>
     where
         T: Clone + 'static,
@@ -93,6 +111,7 @@ impl Registry {
         self.register_impl(key, value, None)
     }
 
+    /// Register or overwrite a global value.
     pub fn replace_global<T>(&self, key: ServiceKey<T>, value: T)
     where
         T: Clone + 'static,
@@ -108,6 +127,8 @@ impl Registry {
         );
     }
 
+    /// A clone of the value under `key`, unless absent or its generation is
+    /// draining.
     pub fn get<T>(&self, key: ServiceKey<T>) -> Option<T>
     where
         T: Clone + 'static,
@@ -121,6 +142,7 @@ impl Registry {
             .cloned()
     }
 
+    /// Whether [`Self::get`] would return a value.
     pub fn contains<T>(&self, key: ServiceKey<T>) -> bool
     where
         T: Clone + 'static,
@@ -128,6 +150,7 @@ impl Registry {
         self.get(key).is_some()
     }
 
+    /// Remove the entry under `key` and return its value.
     pub fn remove<T>(&self, key: ServiceKey<T>) -> Option<T>
     where
         T: Clone + 'static,
@@ -140,6 +163,7 @@ impl Registry {
             .map(|value| *value)
     }
 
+    /// The names of every registered key.
     pub fn names(&self) -> Vec<&'static str> {
         let mut names: Vec<_> = self
             .inner

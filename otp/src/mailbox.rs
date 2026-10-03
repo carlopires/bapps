@@ -12,10 +12,13 @@ use bapps_trio::{CancelScope, Cancelled, sync::Condition, with_cancel_scope};
 
 use crate::{ExitReason, types::MailboxSnapshot};
 
+/// Why a mailbox operation failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MailboxError {
+    /// The other side closed the mailbox.
     Closed,
+    /// The current cancel scope was cancelled while waiting.
     Cancelled(Cancelled),
 }
 
@@ -30,9 +33,12 @@ impl fmt::Display for MailboxError {
 
 impl std::error::Error for MailboxError {}
 
+/// Why [`LocalSender::try_send`] did not deliver; the value is handed back.
 #[derive(Debug)]
 pub enum TrySendError<T> {
+    /// The mailbox is at capacity.
     Full(T),
+    /// The receiver closed the mailbox.
     Closed(T),
 }
 
@@ -60,10 +66,12 @@ impl<T> LocalInner<T> {
 /// receives are cancellation-aware through `bapps_trio`.
 pub struct LocalMailbox<T>(PhantomData<fn(T)>);
 
+/// The sending side of a [`LocalMailbox`]; cloneable.
 pub struct LocalSender<T> {
     inner: Rc<LocalInner<T>>,
 }
 
+/// The receiving side of a [`LocalMailbox`].
 pub struct LocalReceiver<T> {
     inner: Rc<LocalInner<T>>,
 }
@@ -80,6 +88,7 @@ impl MailboxStats {
 }
 
 impl<T: 'static> LocalMailbox<T> {
+    /// A mailbox holding at most `capacity` messages.
     pub fn bounded(capacity: usize) -> (LocalSender<T>, LocalReceiver<T>) {
         Self::bounded_named("mailbox", capacity)
     }
@@ -120,26 +129,37 @@ impl<T> Clone for LocalSender<T> {
 }
 
 impl<T: 'static> LocalSender<T> {
+    /// The most messages it holds.
     pub fn capacity(&self) -> usize {
         self.inner.capacity
     }
 
+    /// Messages waiting now.
     pub fn depth(&self) -> usize {
         self.inner.queue.borrow().len()
     }
 
+    /// Whether either side closed it.
     pub fn is_closed(&self) -> bool {
         self.inner.closed.get()
     }
 
+    /// Depth, capacity and state, for introspection.
     pub fn snapshot(&self) -> MailboxSnapshot {
         snapshot_inner(&self.inner)
     }
 
+    /// Close the mailbox; the receiver drains what is queued, then sees it
+    /// closed.
     pub fn close(&self) {
         close_inner(&self.inner, false);
     }
 
+    /// Send without waiting.
+    ///
+    /// # Errors
+    ///
+    /// [`TrySendError`], with the value, when full or closed.
     pub fn try_send(&self, value: T) -> Result<(), TrySendError<T>> {
         if self.inner.closed.get() {
             return Err(TrySendError::Closed(value));
@@ -240,26 +260,37 @@ impl<T> Drop for LocalSender<T> {
 }
 
 impl<T: 'static> LocalReceiver<T> {
+    /// The most messages it holds.
     pub fn capacity(&self) -> usize {
         self.inner.capacity
     }
 
+    /// Messages waiting now.
     pub fn depth(&self) -> usize {
         self.inner.queue.borrow().len()
     }
 
+    /// Whether either side closed it.
     pub fn is_closed(&self) -> bool {
         self.inner.closed.get()
     }
 
+    /// Depth, capacity and state, for introspection.
     pub fn snapshot(&self) -> MailboxSnapshot {
         snapshot_inner(&self.inner)
     }
 
+    /// Close the mailbox and drop every queued message; senders see it
+    /// closed. (Closing from a sender lets the receiver drain instead.)
     pub fn close(&self) {
         close_inner(&self.inner, true);
     }
 
+    /// A message if one is queued, without waiting.
+    ///
+    /// # Errors
+    ///
+    /// [`MailboxError::Closed`] once closed and drained.
     pub fn try_recv(&self) -> Result<Option<T>, MailboxError> {
         let value = self.inner.queue.borrow_mut().pop_front();
         if value.is_some() {

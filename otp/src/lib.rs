@@ -15,6 +15,7 @@
 //! propagation must use explicit messages/protocols.
 
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 mod application;
 mod child;
@@ -28,7 +29,7 @@ mod tree;
 mod types;
 
 pub use application::Application;
-pub use child::{ChildContext, ChildSpec, ServiceFactory, ServiceFuture};
+pub use child::{ChildContext, ChildSpec};
 pub use error::OtpError;
 pub use generation::{GenerationPhase, ServiceGeneration, ServiceUnavailable};
 pub use mailbox::{
