@@ -1,0 +1,29 @@
+name: Third-party licences
+
+permissions: write-all
+
+on:
+  pull_request:
+    branches: [ main ]
+    types: [ "opened", "synchronize" ]
+  push:
+    branches: [ main ]
+
+jobs:
+  allowed:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          # pull the fork's HEAD instead of the main repo's
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Assert Glommio depends on crates permissively licensed
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          log-level: warn
+          command: check licenses
+          arguments: --all-features

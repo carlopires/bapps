@@ -1,0 +1,117 @@
+name: Rust
+
+permissions: write-all
+
+on:
+  pull_request:
+    branches: [main, master]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main, master]
+
+jobs:
+  doc:
+    name: Documentation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # See https://github.com/rust-lang/rust/issues/148431
+      - name: Use Rust 1.93 for documentation
+        run: rustup override set 1.93.0
+
+      - name: Cache setup
+        uses: ./.github/actions/cache-setup
+
+      - name: Install cargo-deadlinks
+        run: which cargo-deadlinks || cargo install --locked cargo-deadlinks
+
+      - name: Generate documentation
+        env:
+          RUSTDOCFLAGS: >-
+            --cfg zerocopy_unstable_ptr
+            -D rustdoc::broken_intra_doc_links
+        run: |
+          cargo clean --doc
+          cargo doc --workspace --all-features --locked
+
+      - name: Validate links
+        run: cargo deadlinks --dir target/doc/glommio
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Cache setup
+        uses: ./.github/actions/cache-setup
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked
+
+      - name: Install cargo-sort
+        run: which cargo-sort || cargo install --locked cargo-sort
+
+      - name: Check Cargo.toml ordering
+        run: cargo sort --workspace --check
+
+  build-and-test:
+    name: Build and Test (${{ matrix.name }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: glibc
+            target: ""
+            musl: false
+
+          - name: musl
+            target: x86_64-unknown-linux-musl
+            musl: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up musl
+        if: matrix.musl
+        uses: ./.github/actions/setup-musl
+
+      - name: Cache setup
+        uses: ./.github/actions/cache-setup
+
+      - name: Build all targets
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+
+          args=(
+            build
+            --workspace
+            --all-targets
+            --locked
+          )
+
+          if [[ -n "${TARGET}" ]]; then
+            args+=(--target "${TARGET}")
+          fi
+
+          cargo "${args[@]}"
+
+      - name: Run tests
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: .github/scripts/run-tests.sh "${TARGET}"

@@ -1,0 +1,82 @@
+name: Continuous Benchmarking
+
+# TEMPORARILY DISABLED - Re-enable when memory issues are resolved
+# Manual trigger only for now
+on:
+  workflow_dispatch:
+
+env:
+  RUST_BACKTRACE: 1
+  CARGO_TERM_COLOR: always
+
+jobs:
+  benchmark:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-bench-
+
+      - name: Run timer benchmarks
+        run: |
+          # Set memlock limits for io_uring
+          sudo -E env "PATH=$PATH" bash -c "ulimit -Sl 512 && ulimit -Hl 512 && cargo bench --bench timer_benchmark -- --output-format bencher | tee output.txt"
+
+      - name: Store benchmark result (master only)
+        if: github.ref == 'refs/heads/master'
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: Timer Benchmarks
+          tool: 'cargo'
+          output-file-path: output.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Auto-push to gh-pages branch
+          auto-push: true
+          # Alert if performance degrades by more than 20%
+          alert-threshold: '120%'
+          # Add comment on regression
+          comment-on-alert: true
+          # Don't fail the workflow on alert
+          fail-on-alert: false
+
+      - name: Compare benchmark result (PR only)
+        if: github.event_name == 'pull_request'
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: Timer Benchmarks
+          tool: 'cargo'
+          output-file-path: output.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Post performance delta as PR comment
+          comment-always: true
+          # Alert on regression
+          alert-threshold: '120%'
+          comment-on-alert: true
+          # Don't fail PR on regression (just warn)
+          fail-on-alert: false
+
+      - name: Upload benchmark results as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: |
+            output.txt
+            target/criterion/

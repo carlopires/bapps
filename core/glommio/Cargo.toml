@@ -1,0 +1,178 @@
+[package]
+authors = [
+  "DataDog <info@datadoghq.com>",
+  "Glauber Costa <glommer@gmail.com>",
+  "Hippolyte Barraud <hippolyte.barraud@datadoghq.com>",
+]
+categories = ["asynchronous", "concurrency", "filesystem", "network-programming", "os"]
+description = "Glommio is a thread-per-core crate that makes writing highly parallel asynchronous applications in a thread-per-core architecture easier for rustaceans."
+edition = "2021"
+homepage = "https://github.com/glommio/glommio"
+keywords = ["async", "iouring", "linux", "rust", "thread-per-core"]
+license = "Apache-2.0 OR MIT"
+name = "glommio"
+readme = "../README.md"
+repository = "https://github.com/glommio/glommio"
+version = "0.10.0"
+# This is also documented in the README.md under "Supported Rust Versions"
+rust-version = "1.92"
+
+[features]
+default   = ["macros"]
+bench     = []
+debugging = []
+macros    = ["dep:glommio-macros"]
+
+# Unstable features based on nightly
+#
+# `native-thread-local` selects the nightly `#[thread_local]` attribute for
+# executor-local storage instead of `scoped_tls`. The "tls" here is thread
+# local storage, and never Transport Layer Security -- glommio has no TLS of
+# its own. The old name collided with the well-known `native-tls` crate and
+# was read as an empty TLS placeholder more than once, so it survives only as
+# an alias.
+native-thread-local = []
+native-tls          = ["native-thread-local"]
+nightly             = ["native-thread-local"]
+
+[dependencies]
+ahash                 = "0.8"
+backtrace             = { version = "0.3" }
+bencher               = "0.1.5"
+bitflags              = "2.10"
+bitmaps               = "3.2"
+buddy-alloc           = "0.6"
+concurrent-queue      = "2.5"
+crossbeam             = "0.8"
+enclose               = "1.2"
+flume                 = { version = "0.12", features = ["async"] }
+futures-lite          = "2.6"
+glommio-macros        = { version = "0.10.0", path = "../glommio-macros", optional = true }
+intrusive-collections = "0.10"
+io-uring              = "0.7.14"
+lazy_static           = "1.5"
+libc                  = "0.2"
+log                   = "0.4"
+nix                   = { version = "0.30", features = ["event", "fs", "ioctl", "mman", "net", "poll", "sched", "time"] }
+pin-project-lite      = "0.2"
+rlimit                = "0.10"
+scoped-tls            = "1.0"
+scopeguard            = "1.2"
+signal-hook           = { version = "0.4" }
+sketches-ddsketch     = "0.3"
+smallvec              = { version = "1.15", features = ["union"] }
+socket2               = { version = "0.6", features = ["all"] }
+tracing               = "0.1"
+typenum               = "1.19"
+
+[build-dependencies]
+rustc_version = "0.4.1"
+
+[dev-dependencies]
+criterion = { version = "0.8.2", default-features = false, features = ["async", "cargo_bench_support"] }
+fastrand = "2.3"
+futures = "0.3"
+hdrhistogram = "7.5"
+mimalloc = { version = "0.1", default-features = false }
+pretty_env_logger = "0.5"
+rand = "0.9"
+tikv-jemallocator = "0.6"
+tokio = { version = "1.49", default-features = false, features = [
+  "io-util",
+  "macros",
+  "net",
+  "rt",
+  "rt-multi-thread",
+  "sync",
+  "time",
+] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[lints.rust]
+# `nightly` is theirs; the alloc_* cfgs select a global allocator in the
+# alloc_compare example.
+unexpected_cfgs = { level = "warn", check-cfg = [
+  'cfg(alloc_jemalloc)',
+  'cfg(alloc_mimalloc)',
+  'cfg(alloc_system)',
+  'cfg(nightly)',
+] }
+
+[[bench]]
+harness = false
+name    = "competing_io"
+
+[[bench]]
+harness = false
+name    = "echo"
+
+[[bench]]
+harness = false
+name    = "spawn"
+
+[[bench]]
+harness = false
+name    = "timer"
+
+[[bench]]
+harness = false
+name    = "executor"
+
+[[bench]]
+harness = false
+name    = "foreign_wake"
+
+[[bench]]
+harness = false
+name    = "local_channel"
+
+[[bench]]
+harness           = false
+name              = "nop"
+required-features = ["bench"]
+
+[[bench]]
+harness = false
+name    = "preempt"
+
+[[bench]]
+harness = false
+name    = "proxy"
+
+[[bench]]
+harness = false
+name    = "semaphore"
+
+[[bench]]
+harness = false
+name    = "sharding"
+
+[[bench]]
+harness = false
+name    = "shared_channel"
+
+[[bench]]
+harness = false
+name    = "spsc_queue"
+
+[[bench]]
+harness = false
+name    = "tcp"
+
+[[bench]]
+harness = false
+name    = "tokio_tcp"
+
+[[bench]]
+harness = false
+name    = "udp"
+
+[profile.bench]
+# Thin LTO for faster compile times while still getting cross-crate optimizations
+lto = "thin"
+# Single codegen unit for more consistent performance (no parallel codegen variance)
+codegen-units = 1
+# Maximum optimization level
+opt-level = 3
+# Include debug info for profiling (doesn't affect performance)
+debug = true

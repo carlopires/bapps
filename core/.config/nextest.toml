@@ -1,0 +1,20 @@
+# nextest runs each test in its own process, which is why several of this
+# repo's tests are reliable under it and were not under `cargo test`: anything
+# measuring process-wide state -- open file descriptors, CPU affinity -- reads
+# its own process rather than a shared one.
+
+[profile.default]
+# Tests that hang are the failure mode this repo produces most often: a missing
+# wake leaves a future pending forever rather than failing an assertion. Without
+# a timeout that is an infinite run rather than a red test.
+slow-timeout = { period = "30s", terminate-after = 4 }
+
+# Never silently: a flake that gets retried away is a bug nobody sees.
+retries = 0
+
+fail-fast = false
+
+[profile.ci]
+slow-timeout = { period = "60s", terminate-after = 3 }
+fail-fast = false
+final-status-level = "slow"

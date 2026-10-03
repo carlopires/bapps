@@ -1,0 +1,3 @@
+[workspace]
+members  = ["examples", "glommio", "glommio-macros"]
+resolver = "2"

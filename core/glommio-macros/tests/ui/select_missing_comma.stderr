@@ -1,0 +1,5 @@
+error: expected `,` after this branch: only a body ending in a block may omit it, as in a `match` arm
+ --> tests/ui/select_missing_comma.rs:6:35
+  |
+6 |             v = async { 1u32 } => v
+  |                                   ^

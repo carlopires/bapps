@@ -1,0 +1,5 @@
+error: placement takes a Placement variant such as `Unbound`, `Fixed(0)` or `Fenced(cpus)`, not an arbitrary expression. Build the executor with LocalExecutorBuilder if you need a computed placement
+ --> tests/ui/placement_expression.rs:1:36
+  |
+1 | #[glommio_macros::main(placement = if true { 1 } else { 2 })]
+  |                                    ^^^^^^^^^^^^^^^^^^^^^^^^

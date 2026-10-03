@@ -1,0 +1,75 @@
+[package]
+edition = "2024"
+license = "Apache-2.0 OR MIT"
+name    = "examples"
+publish = false
+version = "0.0.0"
+
+[dev-dependencies]
+byte-unit      = "5.1.4"
+clap           = "4.5.3"
+fastrand       = "2"
+futures        = "~0.3.5"
+futures-lite   = "2.6.0"
+glommio        = { path = "../glommio" }
+http-body-util = "0.1.0"
+
+# hyper and tokio for the hyper example. We just need the traits from Tokio
+hyper      = { version = "1.2.0", features = ["full"] }
+mimalloc        = { version = "0.1", default-features = false }
+num_cpus   = "1.13.0"
+serde_json = "1.0.114"
+sys-info   = "~0.9.1"
+yansi      = "~1.0.1"
+
+[lints.rust]
+# The alloc_* cfgs select a global allocator in the allocation probes.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(alloc_mimalloc)'] }
+
+[[example]]
+name = "echo"
+path = "echo.rs"
+
+[[example]]
+name = "hello_world"
+path = "hello_world.rs"
+
+[[example]]
+name = "ping_pong"
+path = "ping_pong.rs"
+
+[[example]]
+name = "defer"
+path = "defer.rs"
+
+[[example]]
+name = "cooperative_preempt"
+path = "cooperative_preempt.rs"
+
+[[example]]
+name = "deadline"
+path = "deadline_writer.rs"
+
+[[example]]
+name = "storage"
+path = "storage.rs"
+
+[[example]]
+name = "channel_mesh"
+path = "sharding.rs"
+
+[[example]]
+name = "gate"
+path = "gate.rs"
+
+[[example]]
+name = "hyper_server"
+path = "hyper_server.rs"
+
+[[example]]
+name = "hyper_client"
+path = "hyper_client.rs"
+
+[[example]]
+name = "alloc_per_op"
+path = "../docs/investigations/allocations/probe_alloc_per_op.rs"
