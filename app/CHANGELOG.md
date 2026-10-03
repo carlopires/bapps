@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.0 — a stable public API (breaking)
+
+- `AppError` is an enum (`Config`, `System`, `StartupTimeout`,
+  `ShardFailed { shard, reason }`, `NodeStopped`, `Cancelled`) instead of a
+  `String`; the CPU helpers, `RpcLimits::validate`, `ReadyGate::wait`, `serve`
+  and `run_application` return it.
+- Shard factories may return any `Result<(), E: Display>` (trait
+  `ShardResult`); existing `Result<(), String>` factories compile unchanged.
+- `#[non_exhaustive]` on `CallError`, `AppError`, metrics and snapshots;
+  `RpcLimits` and `CallOptions` are built with `with_*` methods.
+- `CallError`'s `Display` is a sentence instead of its `Debug` form.
+- Every public item is documented; `missing_docs` is enforced.
+
+See [docs/migration-0.8.md](../docs/migration-0.8.md) for each change and its replacement.
+
 ## 0.7.0 — calls carry the caller's deadline
 
 `ShardClient::call` caps its timeout at the caller's remaining time (the

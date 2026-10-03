@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.8.0 — a stable public API (breaking)
+
+- `#[non_exhaustive]` on `ExitReason`, `Strategy`, `OtpError` and the other
+  errors, phases, statuses and reports; `RestartIntensity::new(max, within)`.
+- `ChildSpec` getters renamed: `scheduling_class()` (was
+  `task_class_value()`), `child_kind()` (was `child_type_value()`).
+- `SupervisorSpec::run_root` and `run_root_started` are crate-private;
+  `ServiceFactory` and `ServiceFuture` are no longer exported.
+- `OtpError::Registry` is removed.
+- Every public item is documented; `missing_docs` is enforced.
+
+See [docs/migration-0.8.md](../docs/migration-0.8.md) for each change and its replacement.
+
 ## 0.7.0
 
 Dependency-only: `bapps-trio` 0.7.0.

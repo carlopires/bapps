@@ -8,7 +8,7 @@ exclude = ["core/examples"]
 [workspace.package]
 # One version for the platform crates. `core` keeps Glommio's own
 # version line (see core/CHANGELOG.md) so upstream merges stay simple.
-version = "0.7.0"
+version = "0.8.0"
 edition = "2024"
 rust-version = "1.92"
 license = "MIT OR Apache-2.0"
@@ -16,9 +16,9 @@ repository = "https://github.com/carlopires/bapps"
 
 [workspace.dependencies]
 glommio = { package = "bapps-core", path = "core/glommio", default-features = false }
-bapps-trio = { version = "=0.7.0", path = "trio" }
-bapps-otp = { version = "=0.7.0", path = "otp" }
-bapps-app = { version = "=0.7.0", path = "app" }
+bapps-trio = { version = "=0.8.0", path = "trio" }
+bapps-otp = { version = "=0.8.0", path = "otp" }
+bapps-app = { version = "=0.8.0", path = "app" }
 
 # Moved from core/glommio, where a non-root profile was ignored.
 [profile.bench]

@@ -21,7 +21,7 @@ glommio = { package = "glommio-ng", version = "0.12" }
 in automatically by the default `macros` feature. You do not depend on it
 directly.
 
-## Unreleased (bapps 0.8.0)
+## bapps core (bapps 0.8.0)
 
 - `executor_stats`, `task_queue_stats` and `all_task_queue_stats` now
   document that reading resets: each call returns what accumulated since the

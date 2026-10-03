@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.8.0 — a stable public API (breaking)
+
+- One public path per item: `cancel`, `foreign`, `lab`, `nursery`,
+  `obligation`, `task_class` and `time` are private; use the root re-exports.
+  `sync`, `testing` and `to_thread` stay public. Returned types are nameable:
+  `CancelledFuture`, `sync::ConditionWait`, `sync::EventWait`,
+  `testing::WaitFor`.
+- `#[non_exhaustive]` on `CancelReason`, `TaskClass`, the error enums,
+  `Cancelled`, `CancelCause` and the lab report types; `LabConfig` is built
+  with `LabConfig::new(seed).with_max_steps(n)`.
+- `TaskStatus::started` returns `Result<(), NoWaiter<T>>` instead of exposing
+  `glommio::GlommioError`.
+- `NurseryError` and `StartError` implement `Display` and `Error`.
+- Every public item is documented; `missing_docs` is enforced.
+
+See [docs/migration-0.8.md](../docs/migration-0.8.md) for each change and its replacement.
+
 ## 0.7.0 — deadlines in scopes, capacity limiter, blocking work
 
 - Deadlines are part of a cancel scope: `fail_after`, `move_on_after` and the
